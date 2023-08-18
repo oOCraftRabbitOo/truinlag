@@ -5,7 +5,7 @@ use rand::{seq::SliceRandom, thread_rng, Rng};
 use serde;
 use std::fmt;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct Config {
     link_kaffskala: String,
     link_custom_challenges: String,
@@ -241,7 +241,7 @@ pub struct GameState<'a> {
     pub running: bool,
     pub challenges: Vec<RawChallenge>,
     pub teams: Vec<Team<'a>>,
-    pub players: Vec<Player>
+    pub players: Vec<Player>,
 }
 
 pub fn get_challenges(config: &Config) -> Result<Vec<RawChallenge>> {
@@ -402,3 +402,4 @@ mod tests {
         }
     }
 }
+

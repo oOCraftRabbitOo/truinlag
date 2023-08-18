@@ -1,7 +1,7 @@
 use super::*;
-use serde::{Serialize, Deserialize}
+use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Command {
     Catch {
         catcher: String,
@@ -25,7 +25,7 @@ pub enum Command {
     Stop,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Response {
     Catch {
         catcher: String,
@@ -47,11 +47,12 @@ pub enum Response {
     Error {
         command: Command,
         error: Error,
-    }
+    },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Error {
     TeamNotFound(String),
     ChallengeNotFound(String),
+    EngineFaliure,
 }

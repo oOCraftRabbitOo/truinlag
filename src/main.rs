@@ -1,8 +1,7 @@
 use bincode;
-use serde;
-use serde::{Deserialize, Serialize};
 use std::fs;
-use std::os::unix::net;
+use tokio::net;
+use tokio::sync::{broadcast, mpsc, oneshot};
 use truinlag::error::Result;
 use truinlag::*;
 
@@ -54,7 +53,10 @@ fn handle_command(command: commands::Command, state: &mut GameState) -> commands
     use truinlag::commands::Command;
     match command {
         Command::Catch { catcher, caught } => todo!(),
-        Command::Complete { completer, completed } => todo!(),
+        Command::Complete {
+            completer,
+            completed,
+        } => todo!(),
         Command::End => todo!(),
         Command::MakeCatcher(team) => todo!(),
         Command::MakeRunner(team) => todo!(),
@@ -123,4 +125,111 @@ fn start_game() {
     });
 }
 
-fn main() {}
+#[derive(Clone, Debug)]
+enum EngineCommand {
+    Command(commands::Command),
+    Shutdown,
+}
+
+#[derive(Clone, Debug)]
+enum ClientCommand {
+    Command(commands::Response),
+    Shutdown,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    Ok(())
+}
+
+async fn manager() -> Result<()> {
+    let (mpsc_tx, mpsc_rx) = mpsc::channel::<EngineCommand>(1024);
+
+    let _mpsc_tx_staller = mpsc_tx.clone();
+    // this is just a bad workaround to ensure that the mpsc channel is not closed if all clients
+    // disconnect
+
+    let (broadcast_tx, broadcast_rx) = broadcast::channel::<ClientCommand>(1024);
+
+    let _broadcast_rx_staller = broadcast_tx.subscribe();
+    // this, once again, just exists to prevent the broadcast channel from closing unexpectedly
+
+    let (oneshot_tx, oneshot_rx) = oneshot::channel::<()>();
+
+    let engine_handle =
+        tokio::spawn(async move { engine(mpsc_rx, broadcast_tx, oneshot_tx).await });
+
+    todo!();
+}
+
+async fn engine(
+    mut mpsc_handle: mpsc::Receiver<EngineCommand>,
+    broadcast_handle: broadcast::Sender<ClientCommand>,
+    oneshot_handle: oneshot::Sender<()>,
+) -> Result<()> {
+    let broadcast_send_error =
+        "The broadcast channel should never be closed because of `_broadcast_rx_staller`";
+    loop {
+        match mpsc_handle
+            .recv()
+            .await
+            .expect("Thanks to `_mpsc_tx_staller`, the channel should never be closed.")
+        {
+            EngineCommand::Command(command) => {
+                broadcast_handle
+                    .send(ClientCommand::Command(commands::Response::Error {
+                        command,
+                        error: commands::Error::EngineFaliure,
+                    }))
+                    .expect(broadcast_send_error);
+            }
+            EngineCommand::Shutdown => break,
+        };
+    }
+
+    oneshot_handle.send(()).expect("The oneshot channel should not close before something is sent, manager has no reason to drop it");
+    broadcast_handle
+        .send(ClientCommand::Shutdown)
+        .expect(broadcast_send_error);
+
+    Ok(())
+}
+
+async fn io(
+    tx: mpsc::Sender<EngineCommand>,
+    mut rx: broadcast::Receiver<ClientCommand>,
+    stream: net::UnixStream,
+) {
+    async fn engine_parser(
+        mut rx: broadcast::Receiver<ClientCommand>,
+        stream: net::unix::OwnedWriteHalf,
+    ) -> Result<()> {
+        loop {
+            match rx.recv().await? {
+                ClientCommand::Shutdown => {
+                    break;
+                }
+                ClientCommand::Command(command) => {
+                    let serialzed = bincode::serialize(command)?;
+                    stream.writable();
+                    todo!();
+                }
+            };
+        }
+        Ok(())
+    }
+
+    async fn wrapper(
+        tx: mpsc::Sender<EngineCommand>,
+        rx: broadcast::Receiver<ClientCommand>,
+        stream: net::UnixStream,
+    ) -> Result<()> {
+        let (read_stream, write_stream) = stream.into_split();
+
+        Ok(())
+    }
+
+    wrapper(tx, rx, stream)
+        .await
+        .unwrap_or_else(|error| eprintln!("{}", error));
+}

@@ -3,6 +3,7 @@ use ron;
 use serde::{Deserialize, Serialize};
 use std;
 use std::io;
+use tokio;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -12,6 +13,7 @@ pub enum Error {
     Ron(ron::Error),
     Reqwest(reqwest::Error),
     Bincode(bincode::Error),
+    BroadcastRecvError(tokio::sync::broadcast::error::RecvError),
     PlayerNotFound {
         player_name: String,
         team_name: String,
@@ -24,7 +26,14 @@ impl std::fmt::Display for Error {
             Error::Io(err) => write!(f, "I/O error: {}", err),
             Error::Ron(err) => write!(f, "Deserialisation error: {}", err),
             Error::Reqwest(err) => write!(f, "http reqwest error: {}", err),
-            Error::Bincode(err) => write!(f, "ipc en/decode error: {}", err),
+            Error::Bincode(err) => write!(
+                f,
+                "ipc en/decode error, client might be incompatible: {}",
+                err
+            ),
+            Error::BroadcastRecvError(err) => {
+                write!(f, "error receiving message from engine {}", err)
+            }
             Error::PlayerNotFound {
                 player_name,
                 team_name,
@@ -64,6 +73,12 @@ impl From<reqwest::Error> for Error {
 impl From<bincode::Error> for Error {
     fn from(error: bincode::Error) -> Self {
         Error::Bincode(error)
+    }
+}
+
+impl From<tokio::sync::broadcast::error::RecvError> for Error {
+    fn from(error: tokio::sync::broadcast::error::RecvError) -> Self {
+        Error::BroadcastRecvError(error)
     }
 }
 

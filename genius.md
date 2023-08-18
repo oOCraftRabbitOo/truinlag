@@ -85,3 +85,23 @@ Once a shutdown is initiated, the engine will shut down
 - the manager task through a oneshot channel, the manager task will therefore probably be using `select!` too (it won't be shut down, it will just stop accepting new connections and enter a shutdown phase)
 - itself using the highly sophisticated technology called the `break` keyword
 The manager task will probably then `join!` all the tasks but with a time limit using `select!`, so that it can give an error signal if the tasks don't finish properly.
+
+## A problem emerged while coding
+
+### The problem
+
+As described previously, in order to communicate with the i/o tasks, the the engine will hold the sender handle to a broadcast channel.
+Well, I just found out that one cannot simply clone the receiver handle of a broadcast channel, new ones are generated using `tx.subscribe()`.
+The problem now is, that the manager needs to give every new i/o task a receiving handle to the broadcast channel and that's tough if the thing generating those handles is in the engine's possession
+
+### The solution
+
+The easiest way to get handles from the engine to the i/o tasks is by having it send them to the manager and it passing them to the i/o tasks as they are created.
+For that to work, the manager first needs to ask for another broadcast handle, then the engine neeeds to react by sending such a handle to the to the manager.
+For _that_ to work, the manager needs a way to send signals to the engine and the engine needs a way to send signals to the manager.
+The manager can already send messages to the engine using the normal mpsc channel.
+The engine also has a way to send sth to the manager, but it's through the oneshot channel that's supposed to shut down the programme.
+One could now simply change that oneshot channel to a mpsc channel that is permanent, but i don't think that's a good idea, as the whole shutdown process revolves around the manager awaiting new connections and engine shutdown messages simulatneously using `select!`.
+So that oneshot channel should be reserved for that shutdown message only.
+What could be done is that there could be *another* permanent mpsc channel, only going from the engine to the manager.
+I think it would be smarter though to have the manager create a oneshot channel whenever he needs a new handle and to send the sender of that channel to the engine.
