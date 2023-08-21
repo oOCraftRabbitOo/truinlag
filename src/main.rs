@@ -5,6 +5,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use truinlag::error::Result;
 use truinlag::*;
 
+/*
 fn handle_requests(state: &mut GameState) -> Result<()> {
     //TODO: Proper error handling within this function, currently crashes too easiily
     use std::io::{Read, Write};
@@ -48,6 +49,7 @@ fn handle_requests(state: &mut GameState) -> Result<()> {
 
     Ok(())
 }
+*/
 
 fn handle_command(command: commands::Command, state: &mut GameState) -> commands::Response {
     use truinlag::commands::Command;
@@ -125,9 +127,10 @@ fn start_game() {
     });
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum EngineCommand {
     Command(commands::Command),
+    BroadcastRequest(oneshot::Sender<broadcast::Receiver<ClientCommand>>),
     Shutdown,
 }
 
@@ -183,6 +186,9 @@ async fn engine(
                     }))
                     .expect(broadcast_send_error);
             }
+            EngineCommand::BroadcastRequest(oneshot_sender) => {
+                oneshot_sender.send(broadcast_handle.subscribe());
+            }
             EngineCommand::Shutdown => break,
         };
     }
@@ -210,12 +216,32 @@ async fn io(
                     break;
                 }
                 ClientCommand::Command(command) => {
-                    let serialzed = bincode::serialize(command)?;
-                    stream.writable();
-                    todo!();
+                    let serialized = bincode::serialize(&command)?;
+                    stream.writable().await?;
+                    stream.try_write(&serialized)?;
                 }
             };
         }
+        Ok(())
+    }
+
+    async fn client_parser(
+        mut tx: mpsc::Sender<EngineCommand>,
+        stream: net::unix::OwnedReadHalf,
+    ) -> Result<()> {
+        loop {
+            let mut buf: [u8; 1024] = [0; 1024];
+
+            stream.readable().await?;
+            let bytes_read = stream.try_read(&mut buf)?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            let command: commands::Command = bincode::deserialize_from(&buf[..bytes_read])?;
+        }
+
         Ok(())
     }
 
