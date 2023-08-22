@@ -14,6 +14,7 @@ pub enum Error {
     Reqwest(reqwest::Error),
     Bincode(bincode::Error),
     BroadcastRecvError(tokio::sync::broadcast::error::RecvError),
+    MpscSendError(tokio::sync::mpsc::error::SendError<EngineCommand>),
     PlayerNotFound {
         player_name: String,
         team_name: String,
@@ -26,6 +27,7 @@ impl std::fmt::Display for Error {
             Error::Io(err) => write!(f, "I/O error: {}", err),
             Error::Ron(err) => write!(f, "Deserialisation error: {}", err),
             Error::Reqwest(err) => write!(f, "http reqwest error: {}", err),
+            Error::MpscSendError(err) => write!(f, "mpsc send error: {}", err),
             Error::Bincode(err) => write!(
                 f,
                 "ipc en/decode error, client might be incompatible: {}",

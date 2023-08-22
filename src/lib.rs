@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod error;
+pub mod syncy;
 use crate::error::Result;
 use rand::{seq::SliceRandom, thread_rng, Rng};
 use serde;
@@ -402,4 +403,3 @@ mod tests {
         }
     }
 }
-

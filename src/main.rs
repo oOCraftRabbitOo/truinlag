@@ -187,7 +187,9 @@ async fn engine(
                     .expect(broadcast_send_error);
             }
             EngineCommand::BroadcastRequest(oneshot_sender) => {
-                oneshot_sender.send(broadcast_handle.subscribe());
+                oneshot_sender
+                    .send(broadcast_handle.subscribe())
+                    .unwrap_or_else(move |_handle| {});
             }
             EngineCommand::Shutdown => break,
         };
@@ -240,6 +242,8 @@ async fn io(
             }
 
             let command: commands::Command = bincode::deserialize_from(&buf[..bytes_read])?;
+
+            tx.send(EngineCommand::Command(command)).await?;
         }
 
         Ok(())
