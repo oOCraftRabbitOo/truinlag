@@ -1,6 +1,6 @@
 pub mod commands;
 pub mod error;
-pub mod syncy;
+pub mod runtime;
 use crate::error::Result;
 use rand::{seq::SliceRandom, thread_rng, Rng};
 use serde;
