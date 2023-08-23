@@ -1,11 +1,11 @@
-use crate::syncy::{ClientCommand, EngineCommand};
+use crate::syncy::EngineCommand;
 use reqwest;
 use ron;
-use serde::{Deserialize, Serialize};
 use std;
 use std::io;
 use tokio;
 use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::task::JoinError;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -18,6 +18,8 @@ pub enum Error {
     BroadcastRecvError(broadcast::error::RecvError),
     MpscSendError(mpsc::error::SendError<EngineCommand>),
     OneshotRecvError(oneshot::error::RecvError),
+    JoinError(JoinError),
+    MutexError,
     PlayerNotFound {
         player_name: String,
         team_name: String,
@@ -32,6 +34,11 @@ impl std::fmt::Display for Error {
             Error::Reqwest(err) => write!(f, "http reqwest error: {}", err),
             Error::MpscSendError(err) => write!(f, "mpsc send error: {}", err),
             Error::OneshotRecvError(err) => write!(f, "oneshot recv error: {}", err),
+            Error::JoinError(err) => write!(f, "error joining task: {}", err),
+            Error::MutexError => write!(
+                f,
+                "Error acquiring mutex lock, other thread might have panicked"
+            ),
             Error::Bincode(err) => write!(
                 f,
                 "ipc en/decode error, client might be incompatible: {}",
