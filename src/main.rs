@@ -1,6 +1,7 @@
 use crate::syncy::{ClientCommand, EngineCommand};
 use bincode;
 use std::fs;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use tokio::net;
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -170,28 +171,30 @@ async fn manager() -> Result<()> {
         todo!();
     }
 
-    let io_tasks = Arc::new(Mutex::new(Vec::new()));
+    let io_muncher = Arc::new(Mutex::new(Vec::<Box<dyn Future<Output = ()>>>::new()));
+
+    let io_feeder = io_muncher.clone();
 
     let listener = net::UnixListener::bind("/tmp/truinsocket").expect(
         "cannot bind to socket (maybe other session running, session improperly terminated, etc.)",
     );
 
     let accept_connections = async move {
+        async fn make_io_task(
+            stream: net::UnixStream,
+            staller: &mpsc::Sender<EngineCommand>,
+        ) -> Result<()> {
+            let (broadcast_rx_tx, broadcast_rx_rx) = oneshot::channel();
+            staller
+                .send(EngineCommand::BroadcastRequest(broadcast_rx_tx))
+                .await?;
+            let broadcast_rx = broadcast_rx_rx.await?;
+
+            Ok(())
+        }
+
         loop {
             let stream = listener.accept().await;
-
-            async fn make_io_task(
-                stream: net::UnixStream,
-                staller: &mpsc::Sender<EngineCommand>,
-            ) -> Result<()> {
-                let (broadcast_rx_tx, broadcast_rx_rx) = oneshot::channel();
-                staller
-                    .send(EngineCommand::BroadcastRequest(broadcast_rx_tx))
-                    .await?;
-                let broadcast_rx = broadcast_rx_rx.await?;
-
-                Ok(())
-            }
 
             match stream {
                 Ok((stream, _addr)) => {
