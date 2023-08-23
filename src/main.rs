@@ -1,5 +1,7 @@
+use crate::syncy::{ClientCommand, EngineCommand};
 use bincode;
 use std::fs;
+use std::sync::{Arc, Mutex};
 use tokio::net;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use truinlag::error::Result;
@@ -7,7 +9,7 @@ use truinlag::*;
 
 /*
 fn handle_requests(state: &mut GameState) -> Result<()> {
-    //TODO: Proper error handling within this function, currently crashes too easiily
+    //TODO: Proper error handling within this function, currently crashes too easily
     use std::io::{Read, Write};
 
     fn handle_client(mut stream: net::UnixStream, state: &mut GameState) -> Result<bool> {
@@ -127,6 +129,7 @@ fn start_game() {
     });
 }
 
+/*
 #[derive(Debug)]
 enum EngineCommand {
     Command(commands::Command),
@@ -139,6 +142,7 @@ enum ClientCommand {
     Command(commands::Response),
     Shutdown,
 }
+*/
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -148,19 +152,74 @@ async fn main() -> Result<()> {
 async fn manager() -> Result<()> {
     let (mpsc_tx, mpsc_rx) = mpsc::channel::<EngineCommand>(1024);
 
-    let _mpsc_tx_staller = mpsc_tx.clone();
+    let mpsc_tx_staller = mpsc_tx.clone();
     // this is just a bad workaround to ensure that the mpsc channel is not closed if all clients
-    // disconnect
+    // disconnect (update: the manager needs this channel too, so this is not true anymore)
 
     let (broadcast_tx, broadcast_rx) = broadcast::channel::<ClientCommand>(1024);
 
     let _broadcast_rx_staller = broadcast_tx.subscribe();
-    // this, once again, just exists to prevent the broadcast channel from closing unexpectedly
+    // this just exists to prevent the broadcast channel from closing unexpectedly
 
     let (oneshot_tx, oneshot_rx) = oneshot::channel::<()>();
 
     let engine_handle =
         tokio::spawn(async move { engine(mpsc_rx, broadcast_tx, oneshot_tx).await });
+
+    fn make_io_task(stream: net::UnixStream) -> Result<()> {
+        todo!();
+    }
+
+    let io_tasks = Arc::new(Mutex::new(Vec::new()));
+
+    let listener = net::UnixListener::bind("/tmp/truinsocket").expect(
+        "cannot bind to socket (maybe other session running, session improperly terminated, etc.)",
+    );
+
+    let accept_connections = async move {
+        loop {
+            let stream = listener.accept().await;
+
+            async fn make_io_task(
+                stream: net::UnixStream,
+                staller: &mpsc::Sender<EngineCommand>,
+            ) -> Result<()> {
+                let (broadcast_rx_tx, broadcast_rx_rx) = oneshot::channel();
+                staller
+                    .send(EngineCommand::BroadcastRequest(broadcast_rx_tx))
+                    .await?;
+                let broadcast_rx = broadcast_rx_rx.await?;
+
+                Ok(())
+            }
+
+            match stream {
+                Ok((stream, _addr)) => {
+                    make_io_task(stream, &mpsc_tx_staller)
+                        .await
+                        .unwrap_or_else(|err| {
+                            eprintln!(
+                                "Encountered an error creating new i/o task, continuing: {}",
+                                err
+                            )
+                        });
+                }
+                Err(err) => eprintln!(
+                    "Manager: Error accepting new connection, continuing: {}",
+                    err
+                ),
+            };
+        }
+    };
+
+    let wait_for_shutdown = async move {
+        oneshot_rx.await.unwrap_or_else(|err| {
+            eprintln!(
+                "Manager: The engine dropped the oneshot_tx, shutting down: {}",
+                err
+            )
+        });
+    };
 
     todo!();
 }
@@ -176,7 +235,7 @@ async fn engine(
         match mpsc_handle
             .recv()
             .await
-            .expect("Thanks to `_mpsc_tx_staller`, the channel should never be closed.")
+            .expect("Thanks to `mpsc_tx_staller`, the channel should never be closed.")
         {
             EngineCommand::Command(command) => {
                 broadcast_handle

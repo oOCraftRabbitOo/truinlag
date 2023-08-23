@@ -1,9 +1,11 @@
+use crate::syncy::{ClientCommand, EngineCommand};
 use reqwest;
 use ron;
 use serde::{Deserialize, Serialize};
 use std;
 use std::io;
 use tokio;
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -13,8 +15,9 @@ pub enum Error {
     Ron(ron::Error),
     Reqwest(reqwest::Error),
     Bincode(bincode::Error),
-    BroadcastRecvError(tokio::sync::broadcast::error::RecvError),
-    MpscSendError(tokio::sync::mpsc::error::SendError<EngineCommand>),
+    BroadcastRecvError(broadcast::error::RecvError),
+    MpscSendError(mpsc::error::SendError<EngineCommand>),
+    OneshotRecvError(oneshot::error::RecvError),
     PlayerNotFound {
         player_name: String,
         team_name: String,
@@ -28,6 +31,7 @@ impl std::fmt::Display for Error {
             Error::Ron(err) => write!(f, "Deserialisation error: {}", err),
             Error::Reqwest(err) => write!(f, "http reqwest error: {}", err),
             Error::MpscSendError(err) => write!(f, "mpsc send error: {}", err),
+            Error::OneshotRecvError(err) => write!(f, "oneshot recv error: {}", err),
             Error::Bincode(err) => write!(
                 f,
                 "ipc en/decode error, client might be incompatible: {}",
@@ -78,9 +82,21 @@ impl From<bincode::Error> for Error {
     }
 }
 
-impl From<tokio::sync::broadcast::error::RecvError> for Error {
-    fn from(error: tokio::sync::broadcast::error::RecvError) -> Self {
+impl From<broadcast::error::RecvError> for Error {
+    fn from(error: broadcast::error::RecvError) -> Self {
         Error::BroadcastRecvError(error)
+    }
+}
+
+impl From<mpsc::error::SendError<EngineCommand>> for Error {
+    fn from(error: mpsc::error::SendError<EngineCommand>) -> Self {
+        Error::MpscSendError(error)
+    }
+}
+
+impl From<oneshot::error::RecvError> for Error {
+    fn from(error: oneshot::error::RecvError) -> Self {
+        Error::OneshotRecvError(error)
     }
 }
 
