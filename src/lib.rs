@@ -1,3 +1,4 @@
+pub mod blocking;
 pub mod commands;
 pub mod error;
 pub mod runtime;
