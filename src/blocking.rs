@@ -14,7 +14,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn connect(addr: String) -> Result<Connection> {
+    pub fn connect(addr: &str) -> Result<Connection> {
         UnixStream::connect(addr)
             .map_err(|err| err.into())
             .map(|stream| Connection { stream })
