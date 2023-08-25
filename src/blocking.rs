@@ -1,3 +1,5 @@
+/// # **ACHTUNG, DEPRECATED, WARNING, MÜLLCODE, TRASH, DOESN'T WORK**
+///
 /// # The blocking API to use with the truinlag engine
 ///
 /// **Only use this API if you only ever send single commands. For proper communication, required

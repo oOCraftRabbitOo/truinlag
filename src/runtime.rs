@@ -204,10 +204,17 @@ async fn io(
     stream: net::UnixStream,
     addr: tokio::net::unix::SocketAddr,
 ) {
+    use bytes::Bytes;
+    use futures::prelude::*;
+    use futures::SinkExt;
+    use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+
     async fn engine_parser(
         mut rx: broadcast::Receiver<ClientCommand>,
         stream: net::unix::OwnedWriteHalf,
     ) -> Result<()> {
+        let mut transport = FramedWrite::new(stream, LengthDelimitedCodec::new());
+
         loop {
             match rx.recv().await? {
                 ClientCommand::Shutdown => {
@@ -215,8 +222,7 @@ async fn io(
                 }
                 ClientCommand::Command(command) => {
                     let serialized = bincode::serialize(&command)?;
-                    stream.writable().await?;
-                    stream.try_write(&serialized)?;
+                    transport.send(Bytes::from(serialized)).await?;
                 }
             };
         }
@@ -227,19 +233,16 @@ async fn io(
         tx: mpsc::Sender<EngineCommand>,
         stream: net::unix::OwnedReadHalf,
     ) -> Result<()> {
-        loop {
-            let mut buf: [u8; 1024] = [0; 1024];
+        let mut transport = FramedRead::new(stream, LengthDelimitedCodec::new());
 
-            stream.readable().await?;
-            let bytes_read = stream.try_read(&mut buf)?;
-
-            if bytes_read == 0 {
-                break;
+        while let Some(message) = transport.next().await {
+            match message {
+                Ok(val) => {
+                    let command: commands::Command = bincode::deserialize(&val)?;
+                    tx.send(EngineCommand::Command(command)).await?;
+                }
+                Err(err) => return Err(err.into()),
             }
-
-            let command: commands::Command = bincode::deserialize_from(&buf[..bytes_read])?;
-
-            tx.send(EngineCommand::Command(command)).await?;
         }
 
         Ok(())

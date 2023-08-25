@@ -1,4 +1,4 @@
-pub mod blocking;
+pub mod api;
 pub mod commands;
 pub mod error;
 pub mod runtime;
@@ -404,22 +404,55 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unix_stream_tomfoolery() {
-        println!("yay");
-        use std::io::{Read, Write};
-        use std::net::Shutdown;
-        use std::os::unix::net::UnixStream;
-        let (mut stream1, mut stream2) = UnixStream::pair().unwrap();
-        println!("hui");
-        stream1.write(b"hi").unwrap();
-        stream1.shutdown(Shutdown::Write).unwrap();
-        stream1.write(b"lol").unwrap();
-        stream1.shutdown(Shutdown::Write).unwrap();
-        println!("h0i");
-        let mut buf = String::new();
-        stream2.read_to_string(&mut buf).unwrap();
-        println!("baaguette");
-        assert_eq!(buf, String::from("hi"));
+    #[tokio::test]
+    async fn unix_stream_tomfoolery() {
+        use bytes::Bytes;
+        use futures::prelude::*;
+        use futures::SinkExt;
+        use tokio::net::UnixStream;
+        use tokio_util::codec::{Framed, FramedRead, FramedWrite, LengthDelimitedCodec};
+        let (stream1, stream2) = UnixStream::pair().unwrap();
+        let mut transport1 = Framed::new(stream1, LengthDelimitedCodec::new());
+        let mut transport2 = Framed::new(stream2, LengthDelimitedCodec::new());
+        let frame = Bytes::from("hi");
+        transport1.send(frame).await.unwrap();
+        transport1.send(Bytes::from("lol")).await.unwrap();
+        let response = transport2.next().await.unwrap().unwrap();
+        println!("{:?}", response);
+        transport2.send(Bytes::from("xD")).await.unwrap();
+        let response = transport1.next().await.unwrap().unwrap();
+        println!("{:?}", response);
+        let response = transport2.next().await.unwrap().unwrap();
+        println!("{:?}", response);
+
+        use bincode;
+        use commands::Command;
+        let message = Command::Status;
+        let frame = Bytes::from(bincode::serialize(&message).unwrap());
+        transport1.send(frame).await.unwrap();
+        let response = transport2.next().await.unwrap().unwrap();
+        let response: Command = bincode::deserialize(&response).unwrap();
+        println!("{:?}", response);
+
+        let message = Command::Catch {
+            catcher: String::from("hans"),
+            caught: String::from("ueli"),
+        };
+        let frame = Bytes::from(bincode::serialize(&message).unwrap());
+        transport1.send(frame).await.unwrap();
+        let response = transport2.next().await.unwrap().unwrap();
+        let response: Command = bincode::deserialize(&response).unwrap();
+        println!("{:?}", response);
+
+        let stream2: UnixStream = transport2.into_inner();
+        let (read2, write2) = stream2.into_split();
+        let mut transport_read = FramedRead::new(read2, LengthDelimitedCodec::new());
+        let mut transport_write = FramedWrite::new(write2, LengthDelimitedCodec::new());
+        transport_write.send(Bytes::from("hui")).await.unwrap();
+        let response = transport1.next().await.unwrap().unwrap();
+        println!("{:?}", response);
+        transport1.send(Bytes::from("bubulu")).await.unwrap();
+        let response = transport_read.next().await.unwrap().unwrap();
+        println!("{:?}", response);
     }
 }
