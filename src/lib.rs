@@ -403,4 +403,23 @@ mod tests {
             println!("{}\n\n", challenge.generate_challenge(&default_config()));
         }
     }
+
+    #[test]
+    fn unix_stream_tomfoolery() {
+        println!("yay");
+        use std::io::{Read, Write};
+        use std::net::Shutdown;
+        use std::os::unix::net::UnixStream;
+        let (mut stream1, mut stream2) = UnixStream::pair().unwrap();
+        println!("hui");
+        stream1.write(b"hi").unwrap();
+        stream1.shutdown(Shutdown::Write).unwrap();
+        stream1.write(b"lol").unwrap();
+        stream1.shutdown(Shutdown::Write).unwrap();
+        println!("h0i");
+        let mut buf = String::new();
+        stream2.read_to_string(&mut buf).unwrap();
+        println!("baaguette");
+        assert_eq!(buf, String::from("hi"));
+    }
 }
