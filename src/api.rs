@@ -26,18 +26,22 @@ impl Connection {
         Ok(())
     }
 
-    pub async fn recv(&mut self) -> Result<Response> {
-        // The problem here is that .next() returns an option. How do i tell the user that the host
-        // is down? I think imma go for Result<Option<Response>>.
-        todo!();
+    pub async fn recv(&mut self) -> Result<Option<Response>> {
+        match self.transport.next().await {
+            Some(message) => Ok(Some(bincode::deserialize(&message?)?)),
+            None => Ok(None),
+        }
     }
 
-    pub async fn close(&mut self) -> Result<()> {
+    pub async fn close(mut self) -> Result<()> {
         self.transport.close().await?;
         Ok(())
     }
 
     pub async fn split(self) -> (RecvConnection, SendConnection) {
+        let mut sock = self.transport.into_inner();
+        let (read_half, write_half) = sock.split();
+
         todo!();
     }
 }
@@ -46,6 +50,44 @@ pub struct SendConnection {
     transport: FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>,
 }
 
+impl SendConnection {
+    pub async fn create(addr: String) -> Result<SendConnection> {
+        let sock = UnixStream::connect(addr).await?;
+        let (_, sock) = sock.into_split();
+        let transport = FramedWrite::new(sock, LengthDelimitedCodec::new());
+
+        Ok(SendConnection { transport })
+    }
+
+    pub async fn send(&mut self, command: &Command) -> Result<()> {
+        let buf = Bytes::from(bincode::serialize(command)?);
+        self.transport.send(buf).await?;
+        Ok(())
+    }
+
+    pub async fn close(mut self) -> Result<()> {
+        self.transport.close().await?;
+        Ok(())
+    }
+}
+
 pub struct RecvConnection {
     transport: FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
+}
+
+impl RecvConnection {
+    pub async fn create(addr: String) -> Result<RecvConnection> {
+        let sock = UnixStream::connect(addr).await?;
+        let (sock, _) = sock.into_split();
+        let transport = FramedRead::new(sock, LengthDelimitedCodec::new());
+
+        Ok(RecvConnection { transport })
+    }
+
+    pub async fn recv(&mut self) -> Result<Option<Response>> {
+        match self.transport.next().await {
+            Some(message) => Ok(Some(bincode::deserialize(&message?)?)),
+            None => Ok(None),
+        }
+    }
 }
