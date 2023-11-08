@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EngineCommand {
-    pub session: String,
+    pub session: Option<String>,
     pub action: EngineAction,
 }
 

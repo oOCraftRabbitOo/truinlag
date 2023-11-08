@@ -2,7 +2,6 @@ use crate::commands::{
     BroadcastAction, ClientCommand, EngineCommand, EngineCommandPackage, ResponseAction,
     ResponsePackage,
 };
-use bincode;
 use bytes::Bytes;
 use error::{Error, Result};
 use futures::prelude::*;
@@ -10,7 +9,7 @@ use futures::SinkExt;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
-use tokio_util::codec::{Framed, FramedRead, FramedWrite, LengthDelimitedCodec};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub mod error;
 
