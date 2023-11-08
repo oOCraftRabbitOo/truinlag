@@ -2,7 +2,37 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum Command {
+pub struct EngineCommand {
+    pub session: String,
+    pub action: EngineAction,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct EngineCommandPackage {
+    pub command: EngineCommand,
+    pub id: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct EngineResponse {
+    pub response_action: ResponseAction,
+    pub broadcast_action: Option<BroadcastAction>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum ClientCommand {
+    Broadcast(BroadcastAction),
+    Response(ResponsePackage),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ResponsePackage {
+    pub action: ResponseAction,
+    pub id: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum EngineAction {
     Catch {
         catcher: String,
         caught: String,
@@ -11,22 +41,14 @@ pub enum Command {
         completer: String,
         completed: String,
     },
-    Start(Config),
+    Start,
     End,
-    MakeCatcher(String),
-    MakeRunner(String),
-    /*
-    AssignTeam {
-        player: String,
-        team: String,
-    },
-    */
     Status,
     Stop,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum Response {
+pub enum ResponseAction {
     Catch {
         catcher: String,
         caught: String,
@@ -44,15 +66,31 @@ pub enum Response {
         players: Vec<Player>,
         teams: Vec<TeamOwningPlayers>,
     },
-    Error {
-        command: Command,
-        error: Error,
+    Error(Error),
+    Success,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum BroadcastAction {
+    Catch {
+        catcher: String,
+        caught: String,
     },
+    Complete {
+        completer: String,
+        completed: String,
+    },
+    Start,
+    End,
+    Crash,
+    Success,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Error {
     TeamNotFound(String),
     ChallengeNotFound(String),
-    EngineFaliure,
+    EngineFailure,
+    GameNotRunning,
+    GameRunning,
 }

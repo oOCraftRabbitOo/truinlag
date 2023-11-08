@@ -1,5 +1,6 @@
 pub mod api;
 pub mod commands;
+pub mod engine;
 pub mod error;
 pub mod runtime;
 use crate::error::Result;
@@ -19,8 +20,9 @@ pub struct Config {
     s_bahn_zones: Vec<i32>,
 }
 
-pub fn default_config() -> Config {
-    Config {
+impl Config {
+    pub fn new() -> Config {
+        Config {
         link_kaffskala: String::from("https://docs.google.com/spreadsheets/d/13DlG2BSQfolPCsoj2LBREeIUgThji_zgeE_q-gHQSL4/export?format=csv"),
         link_custom_challenges: String::from("https://docs.google.com/spreadsheets/d/10EaV2iZUAP8oZH7PLdoWGx9lQPvvN3Hfu7jH2zqKPv4/export?format=csv"),
         relative_standard_deviation: 0.1,
@@ -30,11 +32,14 @@ pub fn default_config() -> Config {
         zones: vec![116, 115, 161, 162, 113, 114, 124, 160, 163, 118, 117, 112, 123, 120, 164, 111, 121, 122, 170, 171, 154, 110, 173, 172, 135, 131, 130, 155, 150, 156, 151, 152, 153, 181, 180, 133, 143, 142, 141, 140, 130, 132, 134],
         s_bahn_zones: vec![132, 110, 151, 180, 120, 181, 155, 133, 156, 117, 121, 141, 142, 134, 112, 154],
     }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Player {
     pub name: String,
+    pub nicknames: Vec<String>,
+    pub discord: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -345,7 +350,7 @@ mod tests {
 
     #[test]
     fn download_challenges() {
-        let challenges = get_challenges(&default_config()).unwrap_or_else(|error| {
+        let challenges = get_challenges(&Config::new()).unwrap_or_else(|error| {
             panic!("The get_challenges function returned an error:\n{}", error);
         });
         for i in &challenges {
@@ -394,13 +399,13 @@ mod tests {
 
     #[test]
     fn generate_challenges() {
-        let challenges = get_challenges(&default_config()).unwrap_or_else(|error| {
+        let challenges = get_challenges(&Config::new()).unwrap_or_else(|error| {
             println!("The get_challenges function returned an error:\n{}", error);
             std::process::exit(1);
         });
         println!("{:?}", challenges);
         for challenge in challenges {
-            println!("{}\n\n", challenge.generate_challenge(&default_config()));
+            println!("{}\n\n", challenge.generate_challenge(&Config::new()));
         }
     }
 
@@ -426,7 +431,7 @@ mod tests {
         println!("{:?}", response);
 
         use bincode;
-        use commands::Command;
+        use commands::EngineAction as Command;
         let message = Command::Status;
         let frame = Bytes::from(bincode::serialize(&message).unwrap());
         transport1.send(frame).await.unwrap();

@@ -1,0 +1,8 @@
+#V2
+CREATE
+INFO
+CREATE test SET name = 'lol';
+INFO
+DEFINE NAMESPACE test
+exit
+EXIT

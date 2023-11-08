@@ -3,20 +3,21 @@ use std::fs;
 use truinlag::error::Result;
 use truinlag::*;
 
-fn handle_command(command: commands::Command, state: &mut GameState) -> commands::Response {
-    use truinlag::commands::Command;
+fn handle_command(
+    command: commands::EngineAction,
+    state: &mut GameState,
+) -> commands::ResponseAction {
+    use truinlag::commands::EngineAction;
     match command {
-        Command::Catch { catcher, caught } => todo!(),
-        Command::Complete {
+        EngineAction::Catch { catcher, caught } => todo!(),
+        EngineAction::Complete {
             completer,
             completed,
         } => todo!(),
-        Command::End => todo!(),
-        Command::MakeCatcher(team) => todo!(),
-        Command::MakeRunner(team) => todo!(),
-        Command::Start(config) => todo!(),
-        Command::Status => todo!(),
-        Command::Stop => todo!(),
+        EngineAction::End => todo!(),
+        EngineAction::Status => todo!(),
+        EngineAction::Stop => todo!(),
+        EngineAction::Start => todo!(),
     }
 }
 
@@ -59,7 +60,7 @@ fn start_game() {
             "Something went wrong reading config file at {}, loading default:\n{}",
             config_file, error
         );
-        default_config()
+        Config::new()
     });
 
     let player_file = "players.ron";
