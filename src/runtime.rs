@@ -3,12 +3,13 @@ use crate::commands::*;
 use crate::engine;
 use crate::error;
 use crate::error::Result;
+use async_broadcast as broadcast;
 use std::future::Future;
 use std::marker::Unpin;
 use std::sync::{Arc, Mutex};
 use tokio::net;
 use tokio::select;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinError;
 use tokio::time::Duration;
 
@@ -35,7 +36,8 @@ pub async fn manager() -> Result<()> {
     // this is just a bad workaround to ensure that the mpsc channel is not closed if all clients
     // disconnect (update: the manager needs this channel too, so this is not true anymore)
 
-    let (broadcast_tx, _broadcast_rx_staller) = broadcast::channel::<IOSignal>(1024);
+    let (broadcast_tx, broadcast_rx_staller) = broadcast::broadcast::<IOSignal>(1024);
+    broadcast_rx_staller.deactivate();
 
     let (oneshot_tx, oneshot_rx) = oneshot::channel::<()>();
 
@@ -200,10 +202,9 @@ async fn engine(
                 let response = engine::vroom(package.command);
                 if let Some(action) = response.broadcast_action {
                     let message = IOSignal::Command(ClientCommand::Broadcast(action));
-                    broadcast_handle.send(message).unwrap_or_else(|err| {
+                    if let Err(err) = broadcast_handle.broadcast_direct(message).await {
                         println!("{}: {}", broadcast_send_error, err);
-                        0
-                    });
+                    };
                 }
                 channel.send(IOSignal::Command(ClientCommand::Response(ResponsePackage {
                     action: response.response_action,
@@ -212,7 +213,7 @@ async fn engine(
             }
             EngineSignal::BroadcastRequest(oneshot_sender) => {
                 oneshot_sender
-                    .send(broadcast_handle.subscribe())
+                    .send(broadcast_handle.new_receiver())
                     .unwrap_or_else(move |_handle| {
                         println!("Engine: couldn't send broadcast handle")
                     });
@@ -225,7 +226,8 @@ async fn engine(
 
     oneshot_handle.send(()).expect("Engine: The oneshot channel should not close before something is sent, manager has no reason to drop it");
     broadcast_handle
-        .send(IOSignal::Shutdown)
+        .broadcast_direct(IOSignal::Shutdown)
+        .await
         .expect(broadcast_send_error);
 
     Ok(())

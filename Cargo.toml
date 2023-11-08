@@ -19,3 +19,4 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7.8", features = ["codec"] }
 futures = "0.3.28"
 bytes = { version = "1.4.0", features = ["serde"] }
+async-broadcast = "0.6.0"

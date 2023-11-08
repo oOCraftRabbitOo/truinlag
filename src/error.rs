@@ -1,10 +1,11 @@
 use crate::runtime::{EngineSignal, IOSignal};
+use async_broadcast as broadcast;
 use reqwest;
 use ron;
 use std;
 use std::io;
 use tokio;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinError;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -15,8 +16,8 @@ pub enum Error {
     Ron(ron::Error),
     Reqwest(reqwest::Error),
     Bincode(bincode::Error),
-    BroadcastRecvError(broadcast::error::RecvError),
-    BroadcastSendError(broadcast::error::SendError<IOSignal>),
+    BroadcastRecvError(broadcast::RecvError),
+    BroadcastSendError(broadcast::SendError<IOSignal>),
     MpscSendError(mpsc::error::SendError<EngineSignal>),
     ClientCommandSendError(mpsc::error::SendError<IOSignal>),
     MpscOneshotRecvSendError(mpsc::error::SendError<oneshot::Receiver<IOSignal>>),
@@ -104,8 +105,8 @@ impl From<bincode::Error> for Error {
     }
 }
 
-impl From<broadcast::error::RecvError> for Error {
-    fn from(error: broadcast::error::RecvError) -> Self {
+impl From<broadcast::RecvError> for Error {
+    fn from(error: broadcast::RecvError) -> Self {
         Error::BroadcastRecvError(error)
     }
 }
@@ -134,8 +135,8 @@ impl From<oneshot::error::RecvError> for Error {
     }
 }
 
-impl From<broadcast::error::SendError<IOSignal>> for Error {
-    fn from(error: broadcast::error::SendError<IOSignal>) -> Self {
+impl From<broadcast::SendError<IOSignal>> for Error {
+    fn from(error: broadcast::SendError<IOSignal>) -> Self {
         Error::BroadcastSendError(error)
     }
 }
