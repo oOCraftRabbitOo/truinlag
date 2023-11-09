@@ -37,7 +37,7 @@ pub async fn manager() -> Result<()> {
     // disconnect (update: the manager needs this channel too, so this is not true anymore)
 
     let (broadcast_tx, broadcast_rx_staller) = broadcast::broadcast::<IOSignal>(1024);
-    broadcast_rx_staller.deactivate();
+    let _broadcast_rx_staller = broadcast_rx_staller.deactivate();
 
     let (oneshot_tx, oneshot_rx) = oneshot::channel::<()>();
 
