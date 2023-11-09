@@ -33,7 +33,7 @@ enum DistributorMessage {
 
 async fn connectinator(
     mut send_req_recv: mpsc::Receiver<SendRequest>,
-    broadcast_send: mpsc::UnboundedSender<BroadcastAction>,
+    broadcast_send: mpsc::Sender<BroadcastAction>,
     socket_read: OwnedReadHalf,
     socket_write: OwnedWriteHalf,
 ) -> Result<()> {
@@ -111,7 +111,7 @@ async fn connectinator(
                 }
                 DistributorMessage::Command(command) => match command {
                     ClientCommand::Broadcast(msg) => {
-                        broadcast_send.send(msg).expect(
+                        broadcast_send.send(msg).await.expect(
                             "Receiver handle can only be dropped if JoinHandle is dropped too",
                         );
                     }
@@ -150,7 +150,7 @@ pub async fn connect(address: Option<&str>) -> Result<(SendConnection, RecvConne
         .await
         .map_err(|err| Error::Connection(err))?
         .into_split();
-    let (broadcast_send, broadcast_recv) = mpsc::unbounded_channel();
+    let (broadcast_send, broadcast_recv) = mpsc::channel(1024);
     let (send_req_send, send_req_recv) = mpsc::channel(1024);
     let handle = tokio::spawn(async move {
         connectinator(send_req_recv, broadcast_send, socket_read, socket_write).await
@@ -186,7 +186,7 @@ impl SendConnection {
 }
 
 pub struct RecvConnection {
-    broadcast_recv: mpsc::UnboundedReceiver<BroadcastAction>,
+    broadcast_recv: mpsc::Receiver<BroadcastAction>,
     handle: tokio::task::JoinHandle<Result<()>>,
 }
 
@@ -197,5 +197,26 @@ impl RecvConnection {
 
     pub async fn disconnect(self) {
         self.handle.abort()
+    }
+
+    pub async fn deactivate(mut self) -> InactiveRecvConnection {
+        let eater_handle =
+            tokio::spawn(async move { while let Some(_) = self.broadcast_recv.recv().await {} });
+        InactiveRecvConnection {
+            eater_handle,
+            handle: self.handle,
+        }
+    }
+}
+
+pub struct InactiveRecvConnection {
+    eater_handle: tokio::task::JoinHandle<()>,
+    handle: tokio::task::JoinHandle<Result<()>>,
+}
+
+impl InactiveRecvConnection {
+    pub async fn disconnect(self) {
+        self.eater_handle.abort();
+        self.handle.abort();
     }
 }
