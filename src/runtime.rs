@@ -37,7 +37,7 @@ pub async fn manager() -> Result<()> {
     // disconnect (update: the manager needs this channel too, so this is not true anymore)
 
     let (broadcast_tx, broadcast_rx_staller) = broadcast::broadcast::<IOSignal>(1024);
-    broadcast_rx_staller.deactivate();
+    let _broadcast_rx_staller = broadcast_rx_staller.deactivate();
 
     let (oneshot_tx, oneshot_rx) = oneshot::channel::<()>();
 
@@ -202,10 +202,17 @@ async fn engine(
                 let response = engine::vroom(package.command);
                 if let Some(action) = response.broadcast_action {
                     let message = IOSignal::Command(ClientCommand::Broadcast(action));
-                    if let Err(err) = broadcast_handle.broadcast_direct(message).await {
+                    if broadcast_handle.is_full() {
+                        println!(
+                            "Engine: broadcast full, {} receivers",
+                            broadcast_handle.receiver_count()
+                        )
+                    }
+                    if let Err(err) = broadcast_handle.broadcast(message).await {
                         println!("{}: {}", broadcast_send_error, err);
                     };
                 }
+                println!("Engine: sending {:?}", response.response_action);
                 channel.send(IOSignal::Command(ClientCommand::Response(ResponsePackage {
                     action: response.response_action,
                     id: package.id
@@ -219,14 +226,26 @@ async fn engine(
                     });
             }
             EngineSignal::Shutdown => {
+                println!("Engine: shutdown signal received");
                 break;
             }
         };
     }
 
     oneshot_handle.send(()).expect("Engine: The oneshot channel should not close before something is sent, manager has no reason to drop it");
+    if broadcast_handle.is_full() {
+        println!(
+            "Engine: broadcast full, {} receivers",
+            broadcast_handle.receiver_count()
+        )
+    }
+    let _schmeceiver = broadcast_handle.new_receiver(); //sending doesn't work otherwise
+    println!(
+        "Engine: {} broadcast receivers",
+        broadcast_handle.receiver_count()
+    );
     broadcast_handle
-        .broadcast_direct(IOSignal::Shutdown)
+        .broadcast(IOSignal::Shutdown)
         .await
         .expect(broadcast_send_error);
 
@@ -250,13 +269,16 @@ async fn io(
         stream: net::unix::OwnedWriteHalf,
     ) -> Result<()> {
         let mut transport = FramedWrite::new(stream, LengthDelimitedCodec::new());
+        let mut count: u64 = 0;
 
         loop {
+            count += 1;
             match rx.recv().await.ok_or(error::Error::IDontCareAnymore)? {
                 IOSignal::Shutdown => {
                     break;
                 }
                 IOSignal::Command(command) => {
+                    println!("IO: sending {}", count);
                     let serialized = bincode::serialize(&command)?;
                     transport.send(Bytes::from(serialized)).await?;
                 }

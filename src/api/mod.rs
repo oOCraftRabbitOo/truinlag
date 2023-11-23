@@ -200,8 +200,14 @@ impl RecvConnection {
     }
 
     pub async fn deactivate(mut self) -> InactiveRecvConnection {
-        let eater_handle =
-            tokio::spawn(async move { while let Some(_) = self.broadcast_recv.recv().await {} });
+        println!("spawning eater");
+        let eater_handle = tokio::spawn(async move {
+            println!("awaiting broadcasts");
+            while let Some(_) = self.broadcast_recv.recv().await {
+                println!("broadcast ignored");
+            }
+            println!("done");
+        });
         InactiveRecvConnection {
             eater_handle,
             handle: self.handle,
