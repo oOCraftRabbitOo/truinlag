@@ -212,7 +212,6 @@ async fn engine(
                         println!("{}: {}", broadcast_send_error, err);
                     };
                 }
-                println!("Engine: sending {:?}", response.response_action);
                 channel.send(IOSignal::Command(ClientCommand::Response(ResponsePackage {
                     action: response.response_action,
                     id: package.id
@@ -269,16 +268,13 @@ async fn io(
         stream: net::unix::OwnedWriteHalf,
     ) -> Result<()> {
         let mut transport = FramedWrite::new(stream, LengthDelimitedCodec::new());
-        let mut count: u64 = 0;
 
         loop {
-            count += 1;
             match rx.recv().await.ok_or(error::Error::IDontCareAnymore)? {
                 IOSignal::Shutdown => {
                     break;
                 }
                 IOSignal::Command(command) => {
-                    println!("IO: sending {}", count);
                     let serialized = bincode::serialize(&command)?;
                     transport.send(Bytes::from(serialized)).await?;
                 }

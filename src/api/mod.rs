@@ -6,9 +6,10 @@ use bytes::Bytes;
 use error::{Error, Result};
 use futures::prelude::*;
 use futures::SinkExt;
+use std::sync::Arc;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub mod error;
@@ -145,7 +146,7 @@ async fn connectinator(
     Ok(())
 }
 
-pub async fn connect(address: Option<&str>) -> Result<(SendConnection, RecvConnection)> {
+pub async fn connect(address: Option<&str>) -> Result<(SendConnection, InactiveRecvConnection)> {
     let (socket_read, socket_write) = UnixStream::connect(address.unwrap_or("/tmp/truinsocket"))
         .await
         .map_err(|err| Error::Connection(err))?
@@ -161,7 +162,9 @@ pub async fn connect(address: Option<&str>) -> Result<(SendConnection, RecvConne
         RecvConnection {
             broadcast_recv,
             handle,
-        },
+        }
+        .deactivate()
+        .await,
     ))
 }
 
@@ -199,16 +202,15 @@ impl RecvConnection {
         self.handle.abort()
     }
 
-    pub async fn deactivate(mut self) -> InactiveRecvConnection {
-        println!("spawning eater");
+    pub async fn deactivate(self) -> InactiveRecvConnection {
+        let broadcast_recv = Arc::new(Mutex::new(self.broadcast_recv));
+        let inner_recv = broadcast_recv.clone();
         let eater_handle = tokio::spawn(async move {
-            println!("awaiting broadcasts");
-            while let Some(_) = self.broadcast_recv.recv().await {
-                println!("broadcast ignored");
-            }
-            println!("done");
+            let mut inner_recv = inner_recv.lock().await;
+            while let Some(_) = inner_recv.recv().await {}
         });
         InactiveRecvConnection {
+            broadcast_recv,
             eater_handle,
             handle: self.handle,
         }
@@ -216,11 +218,21 @@ impl RecvConnection {
 }
 
 pub struct InactiveRecvConnection {
+    broadcast_recv: Arc<Mutex<mpsc::Receiver<BroadcastAction>>>,
     eater_handle: tokio::task::JoinHandle<()>,
     handle: tokio::task::JoinHandle<Result<()>>,
 }
 
 impl InactiveRecvConnection {
+    pub async fn activate(self) -> RecvConnection {
+        self.eater_handle.abort();
+        let broadcast_recv = Arc::into_inner(self.broadcast_recv).unwrap().into_inner();
+        RecvConnection {
+            handle: self.handle,
+            broadcast_recv,
+        }
+    }
+
     pub async fn disconnect(self) {
         self.eater_handle.abort();
         self.handle.abort();
