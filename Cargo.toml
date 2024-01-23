@@ -20,3 +20,4 @@ tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3"
 bytes = { version = "1.4", features = ["serde"] }
 async-broadcast = "0.6"
+bonsaidb = { version = "0.5.0", features = ["local", "async"] }

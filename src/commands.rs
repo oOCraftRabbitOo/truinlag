@@ -8,6 +8,12 @@ pub struct EngineCommand {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Mode {
+    Traditional,
+    GfroreFurz,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EngineCommandPackage {
     pub command: EngineCommand,
     pub id: u64,
@@ -42,9 +48,8 @@ pub enum EngineAction {
         completed: String,
     },
     Start,
-    End,
-    Status,
     Stop,
+    Status,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -88,9 +93,5 @@ pub enum BroadcastAction {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Error {
-    TeamNotFound(String),
-    ChallengeNotFound(String),
-    EngineFailure,
-    GameNotRunning,
-    GameRunning,
+    SessionNotFound(String),
 }
