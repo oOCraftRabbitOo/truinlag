@@ -62,9 +62,29 @@ fn _start_game() {
     });
 }
 
+#[derive(Debug)]
+struct TestConfig {
+    thing: Option<String>,
+    thang: Option<i32>,
+}
+
+impl Default for TestConfig {
+    fn default() -> Self {
+        Self {
+            thang: Some(42),
+            thing: Some("foo".into()),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    manager().await.unwrap();
+    // manager().await.unwrap();
+
+    let local = TestConfig {
+        thing: None,
+        thang: Some(69),
+    };
 
     Ok(())
 }

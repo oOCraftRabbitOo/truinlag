@@ -10,7 +10,7 @@ pub struct EngineCommand {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Mode {
     Traditional,
-    GfroreFurz,
+    Gfrorefurz,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -39,14 +39,8 @@ pub struct ResponsePackage {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum EngineAction {
-    Catch {
-        catcher: String,
-        caught: String,
-    },
-    Complete {
-        completer: String,
-        completed: String,
-    },
+    Catch { catcher: String, caught: String },
+    Complete { completer: String, completed: u32 },
     Start,
     Stop,
     Status,
