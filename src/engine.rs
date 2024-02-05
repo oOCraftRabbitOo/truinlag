@@ -11,6 +11,7 @@ use bonsaidb::core::schema::{
 use bonsaidb::local::config::Builder;
 use bonsaidb::local::{config, AsyncDatabase, AsyncStorage};
 use chrono;
+use partially::Partial;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_with;
@@ -24,7 +25,7 @@ pub fn vroom(command: EngineCommand) -> EngineResponse {
 }
 
 #[serde_with::serde_as]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Partial)]
 struct Config {
     // Pointcalc
     relative_standard_deviation: f64,
@@ -53,32 +54,6 @@ struct Config {
     specific_period: chrono::Duration,
 }
 
-struct PartialConfig {
-    relative_standard_deviation: Option<f64>,
-    points_per_kaffness: Option<u64>,
-    points_per_grade: Option<u64>,
-    points_per_walking_minute: Option<u64>,
-    points_per_stationary_minute: Option<u64>,
-
-    // Zonenkaff
-    points_per_connected_zone_less_than_6: Option<u64>,
-    points_per_bad_connectivity_index: Option<u64>,
-    points_for_no_train: Option<u64>,
-    points_for_mongus: Option<u64>,
-
-    // Number of Catchers
-    num_catchers: Option<u64>,
-
-    // Bounty system
-    bounty_base_points: Option<u64>,
-    bounty_start_points: Option<u64>,
-    bounty_percentage: Option<f64>,
-
-    // Times
-    unspecific_time: Option<chrono::NaiveTime>,
-    specific_period: Option<chrono::Duration>,
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -97,77 +72,6 @@ impl Default for Config {
             bounty_percentage: 0.25,
             unspecific_time: chrono::NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
             specific_period: chrono::Duration::minutes(15),
-        }
-    }
-}
-
-impl PartialConfig {
-    fn supplement(self, other: Self) -> Self {
-        Self {
-            relative_standard_deviation: self
-                .relative_standard_deviation
-                .or(other.relative_standard_deviation),
-            points_per_kaffness: self.points_per_kaffness.or(other.points_per_kaffness),
-            points_per_grade: self.points_per_grade.or(other.points_per_grade),
-            points_per_connected_zone_less_than_6: self
-                .points_per_connected_zone_less_than_6
-                .or(other.points_per_connected_zone_less_than_6),
-            points_per_bad_connectivity_index: self
-                .points_per_bad_connectivity_index
-                .or(other.points_per_bad_connectivity_index),
-            points_for_no_train: self.points_for_no_train.or(other.points_for_no_train),
-            points_for_mongus: self.points_for_mongus.or(other.points_for_mongus),
-            num_catchers: self.num_catchers.or(other.num_catchers),
-            bounty_base_points: self.bounty_base_points.or(other.bounty_base_points),
-            bounty_percentage: self.bounty_percentage.or(other.bounty_percentage),
-            unspecific_time: self.unspecific_time.or(other.unspecific_time),
-            specific_period: self.specific_period.or(other.specific_period),
-            bounty_start_points: self.bounty_start_points.or(other.bounty_start_points),
-            points_per_stationary_minute: self
-                .points_per_stationary_minute
-                .or(other.points_per_stationary_minute),
-            points_per_walking_minute: self
-                .points_per_walking_minute
-                .or(other.points_per_walking_minute),
-        }
-    }
-
-    fn complete(self) -> Config {
-        let default = Config::default();
-        Config {
-            relative_standard_deviation: self
-                .relative_standard_deviation
-                .unwrap_or(default.relative_standard_deviation),
-            points_for_mongus: self.points_for_mongus.unwrap_or(default.points_for_mongus),
-            points_for_no_train: self
-                .points_for_no_train
-                .unwrap_or(default.points_for_no_train),
-            points_per_bad_connectivity_index: self
-                .points_per_bad_connectivity_index
-                .unwrap_or(default.points_per_bad_connectivity_index),
-            points_per_connected_zone_less_than_6: self
-                .points_per_connected_zone_less_than_6
-                .unwrap_or(default.points_per_connected_zone_less_than_6),
-            points_per_grade: self.points_per_grade.unwrap_or(default.points_per_grade),
-            points_per_kaffness: self
-                .points_per_kaffness
-                .unwrap_or(default.points_per_kaffness),
-            bounty_start_points: self
-                .bounty_start_points
-                .unwrap_or(default.bounty_start_points),
-            bounty_base_points: self
-                .bounty_base_points
-                .unwrap_or(default.bounty_base_points),
-            bounty_percentage: self.bounty_percentage.unwrap_or(default.bounty_percentage),
-            specific_period: self.specific_period.unwrap_or(default.specific_period),
-            unspecific_time: self.unspecific_time.unwrap_or(default.unspecific_time),
-            num_catchers: self.num_catchers.unwrap_or(default.num_catchers),
-            points_per_walking_minute: self
-                .points_per_walking_minute
-                .unwrap_or(default.points_per_walking_minute),
-            points_per_stationary_minute: self
-                .points_per_stationary_minute
-                .unwrap_or(default.points_per_stationary_minute),
         }
     }
 }
@@ -302,6 +206,7 @@ impl ChallengeEntry {
         points += self.stationary_time as i64 * config.points_per_stationary_minute as i64;
         let reps = self.repetitions.choose(&mut thread_rng()).unwrap_or(0);
         points += reps as i64 * self.points_per_rep as i64;
+        todo!();
     }
 }
 

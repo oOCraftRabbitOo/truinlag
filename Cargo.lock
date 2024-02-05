@@ -1491,6 +1491,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "partially"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c662358b50ce030ff0bf5c174541e37b2e29564732c34504e8ffb952389e3c1"
+dependencies = [
+ "partially_derive",
+]
+
+[[package]]
+name = "partially_derive"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e53059790c7b28bb3a618a75dbfa0c6e569515d0b8d3a4df94baca76d4e14b38"
+dependencies = [
+ "darling 0.20.5",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.48",
+]
+
+[[package]]
 name = "pem-rfc7468"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2293,6 +2314,7 @@ dependencies = [
  "chrono",
  "csv",
  "futures",
+ "partially",
  "rand",
  "rand_distr",
  "reqwest",

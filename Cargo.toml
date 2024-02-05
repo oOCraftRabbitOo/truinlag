@@ -23,3 +23,4 @@ async-broadcast = "0.6"
 bonsaidb = { version = "0.5.0", features = ["local", "async"] }
 chrono = { version = "0.4.33", features = ["serde"] }
 serde_with = { version = "3.6.0", features = ["chrono"] }
+partially = { version = "0.2.1", features = ["derive"] }
