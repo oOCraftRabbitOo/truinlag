@@ -2,7 +2,7 @@ use crate::commands;
 use crate::commands::{
     BroadcastAction, EngineAction, EngineCommand, EngineResponse, Mode, ResponseAction,
 };
-use bonsaidb::core::connection::AsyncStorageConnection;
+use bonsaidb::core::connection::{AsyncConnection, AsyncStorageConnection};
 use bonsaidb::core::document::{CollectionDocument, Emit};
 use bonsaidb::core::schema::{
     Collection, CollectionMapReduce, ReduceResult, Schema, SerializedCollection, SerializedView,
@@ -13,8 +13,8 @@ use bonsaidb::local::{config, AsyncDatabase, AsyncStorage};
 use chrono;
 use partially::Partial;
 use rand::prelude::*;
+use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
-use serde_with;
 use std::path::Path;
 
 pub fn vroom(command: EngineCommand) -> EngineResponse {
@@ -24,8 +24,8 @@ pub fn vroom(command: EngineCommand) -> EngineResponse {
     }
 }
 
-#[serde_with::serde_as]
-#[derive(Debug, Serialize, Deserialize, Partial)]
+#[derive(Partial, Debug, Serialize, Deserialize)]
+#[partially(derive(Debug, Serialize, Deserialize))]
 struct Config {
     // Pointcalc
     relative_standard_deviation: f64,
@@ -50,8 +50,11 @@ struct Config {
 
     // Times
     unspecific_time: chrono::NaiveTime,
-    #[serde_as(as = "serde_with::DurationSeconds<i64>")]
-    specific_period: chrono::Duration,
+    specific_minutes: u64,
+
+    // Fallback Defaults
+    default_challenge_title: String,
+    default_challenge_description: String,
 }
 
 impl Default for Config {
@@ -71,7 +74,10 @@ impl Default for Config {
             bounty_start_points: 250,
             bounty_percentage: 0.25,
             unspecific_time: chrono::NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
-            specific_period: chrono::Duration::minutes(15),
+            specific_minutes: 15,
+            default_challenge_title: "[Kreative Titel]".into(),
+            default_challenge_description:
+                "Ihr hend Päch, die Challenge isch unlösbar. Ihr müend eu e anderi uswähle.".into(),
         }
     }
 }
@@ -85,8 +91,9 @@ struct EngineSchema {}
 struct SessionEntry {
     name: String,
     mode: Mode,
-    discord_game_channel: u64,
-    discord_admin_channel: u64,
+    config: PartialConfig,
+    discord_game_channel: Option<u64>,
+    discord_admin_channel: Option<u64>,
 }
 
 #[derive(Debug, Collection, Serialize, Deserialize)]
@@ -105,6 +112,12 @@ enum ChallengeType {
     Zoneable,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+enum RandomPlaceType {
+    Zone,
+    SBahnZone,
+}
+
 #[derive(Debug, Collection, Serialize, Deserialize)]
 #[collection(name = "challenge")]
 struct ChallengeEntry {
@@ -112,8 +125,9 @@ struct ChallengeEntry {
     kaff: Option<String>,
     title: Option<String>,
     description: Option<String>,
-    kaffskala: u64,
-    grade: u64,
+    kaffskala: Option<u64>,
+    grade: Option<u64>,
+    random_place: Option<RandomPlaceType>,
     points: i64,
     repetitions: std::ops::Range<u64>,
     points_per_rep: i64,
@@ -125,8 +139,8 @@ struct ChallengeEntry {
     comment: String,
 }
 
-#[derive(Debug, Collection, Serialize, Deserialize)]
-#[collection(name = "zone", views = [ZonesByZone])]
+#[derive(Debug, Clone, Collection, Serialize, Deserialize)]
+#[collection(name = "zone", views = [ZonesByZone, ZonesBySBahn])]
 struct ZoneEntry {
     zone: u64,
     num_conn_zones: u64,
@@ -148,6 +162,29 @@ impl CollectionMapReduce for ZonesByZone {
         document
             .header
             .emit_key_and_value(document.contents.zone, 1)
+    }
+
+    fn reduce(
+        &self,
+        mappings: &[ViewMappedValue<Self>],
+        _rereduce: bool,
+    ) -> ReduceResult<Self::View> {
+        Ok(mappings.iter().map(|m| m.value).sum())
+    }
+}
+
+#[derive(Debug, Clone, View, ViewSchema)]
+#[view(collection = ZoneEntry, key = bool, value = u64, name = "by-sbahn")]
+struct ZonesBySBahn;
+
+impl CollectionMapReduce for ZonesBySBahn {
+    fn map<'doc>(
+        &self,
+        document: CollectionDocument<ZoneEntry>,
+    ) -> ViewMapResult<'doc, Self::View> {
+        document
+            .header
+            .emit_key_and_value(document.contents.s_bahn_zone, 1)
     }
 
     fn reduce(
@@ -191,22 +228,139 @@ impl ZoneEntry {
         if zonic_kaffness > 0_f64 {
             zonic_kaffness as u64
         } else {
+            eprintln!("Engine: zonic kaffness for zone {} <= 0", self.zone);
             0
         }
     }
 }
 
 impl ChallengeEntry {
-    fn challenge(&self, config: &Config, zone_zoneables: bool) -> Challenge {
+    async fn challenge(
+        &self,
+        config: &Config,
+        zone_zoneables: bool,
+        db: &AsyncDatabase,
+    ) -> Challenge {
         let mut points = 0;
         points += self.points;
-        points += self.kaffskala as i64 * config.points_per_kaffness as i64;
-        points += self.grade as i64 * config.points_per_grade as i64;
+        if let Some(kaffskala) = self.kaffskala {
+            points += kaffskala as i64 * config.points_per_kaffness as i64;
+        }
+        if let Some(grade) = self.grade {
+            points += grade as i64 * config.points_per_grade as i64;
+        }
         points += self.walking_time as i64 * config.points_per_walking_minute as i64;
         points += self.stationary_time as i64 * config.points_per_stationary_minute as i64;
-        let reps = self.repetitions.choose(&mut thread_rng()).unwrap_or(0);
+        let reps = self
+            .repetitions
+            .clone()
+            .choose(&mut thread_rng())
+            .unwrap_or(0);
         points += reps as i64 * self.points_per_rep as i64;
-        todo!();
+        let mut zone_entries = vec![];
+        let initial_zones = self.zones.clone();
+        for zone in initial_zones {
+            match db
+                .view::<ZonesByZone>()
+                .with_key(&zone)
+                .query_with_collection_docs()
+                .await
+            {
+                Ok(zones) => {
+                    if zones.len() == 0 {
+                        eprintln!(
+                            "Engine: Couldn't find zone {} in database, skipping Zonenkaff and granting 0 points",
+                            zone
+                        );
+                    } else if zones.len() > 1 {
+                        let entry = zones.get(0).unwrap();
+                        eprintln!(
+                            "Engine: Found {} entries for zone {} in database, using the entry with id {} for Zonenkaff",
+                            zones.len(),
+                            zone,
+                            entry.document.header.id
+                            );
+                        zone_entries.push(entry.document.contents.clone())
+                    }
+                }
+                Err(err) => {
+                    eprintln!(
+                        "Engine: Couldn't query database for zone {}, ignoring zone: {}",
+                        zone, err
+                    )
+                }
+            }
+        }
+        if zone_zoneables && matches!(self.kind, ChallengeType::Zoneable) {
+            match ZoneEntry::all_async(db).await {
+                Ok(entries) => {
+                    zone_entries = vec![entries
+                        .iter()
+                        .choose(&mut thread_rng())
+                        .unwrap()
+                        .contents
+                        .clone()]
+                }
+                Err(err) => {
+                    eprintln!("Engine: Couldn't retreive zones from database while selecting random zone for zoneable, skipping step: {}", err)
+                }
+            }
+        }
+        if let Some(place_type) = &self.random_place {
+            match place_type{RandomPlaceType::Zone=>{match ZoneEntry::all_async(db).await{Ok(entries)=>zone_entries=vec![entries.iter().choose(&mut thread_rng()).unwrap().contents.clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve zones from database while choosing random zone, skipping step: {}",err),}}RandomPlaceType::SBahnZone=>{match db.view::<ZonesBySBahn>().with_key(&true).query_with_collection_docs().await{Ok(entries)=>zone_entries=vec![entries.documents.values().choose(&mut thread_rng()).expect("no s-bahn zones found in database").contents.clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve s-bahn zones from database while choosing random s-bahn zone, skipping step: {}",err),}}}
+        }
+        let (zone, z_points) = zone_entries.iter().fold((None, 0), |acc, z| {
+            if acc.1 == 0 || acc.1 > z.zonic_kaffness(config) {
+                (Some(z), z.zonic_kaffness(config))
+            } else {
+                acc
+            }
+        });
+        points += z_points as i64;
+        if !self.fixed {
+            points += Normal::new(0_f64, points as f64 * config.relative_standard_deviation)
+                .unwrap()
+                .sample(&mut thread_rng())
+                .round() as i64
+        }
+
+        let mut title = None;
+        if let Some(kaff) = &self.kaff {
+            title = Some(format!("Usflug Uf {}", kaff))
+        }
+        if let Some(title_override) = &self.title {
+            title = Some(title_override.clone())
+        }
+        if let Some(_) = self.random_place {
+            if let Some(t) = &mut title {
+                *t = t.replace("%p", &zone.unwrap().zone.to_string())
+            }
+        }
+
+        let mut description = None;
+        if let Some(kaff) = &self.kaff {
+            description = Some(format!("Gönd nach {}.", kaff))
+        }
+        if let Some(description_override) = &self.description {
+            description = Some(description_override.clone())
+        }
+        if let Some(_) = self.random_place {
+            if let Some(d) = &mut description {
+                *d = d.replace("%p", &zone.unwrap().zone.to_string())
+            }
+        }
+
+        let zone = match zone {
+            Some(z) => Some(z.clone()),
+            None => None,
+        };
+
+        Challenge {
+            title: title.unwrap_or(config.default_challenge_title.clone()),
+            description: description.unwrap_or(config.default_challenge_description.clone()),
+            points: points as u64,
+            zone,
+        }
     }
 }
 
@@ -214,7 +368,7 @@ struct Challenge {
     title: String,
     description: String,
     points: u64,
-    zone: Option<u64>,
+    zone: Option<ZoneEntry>,
 }
 
 struct Session {
