@@ -135,6 +135,7 @@ struct ChallengeEntry {
     zones: Vec<u64>,
     walking_time: i64,
     stationary_time: i64,
+    action: Option<ChallengeActionEntry>,
     last_edit: chrono::DateTime<chrono::Local>,
     comment: String,
 }
@@ -208,6 +209,13 @@ struct TeamEntry {
     discord_channel: Option<u64>,
 }
 
+struct Team {
+    challenges: Vec<Challenge>,
+    is_catcher: bool,
+    points: u64,
+    bounty: u64,
+}
+
 impl ZoneEntry {
     fn zonic_kaffness(&self, config: &Config) -> u64 {
         let zonic_kaffness = ((6_f64 - self.num_conn_zones as f64)
@@ -240,7 +248,7 @@ impl ChallengeEntry {
         config: &Config,
         zone_zoneables: bool,
         db: &AsyncDatabase,
-    ) -> Challenge {
+    ) -> Option<Challenge> {
         let mut points = 0;
         points += self.points;
         if let Some(kaffskala) = self.kaffskala {
@@ -336,6 +344,9 @@ impl ChallengeEntry {
                 *t = t.replace("%p", &zone.unwrap().zone.to_string())
             }
         }
+        if let Some(t) = &mut title {
+            *t = t.replace("%r", &reps.to_string());
+        }
 
         let mut description = None;
         if let Some(kaff) = &self.kaff {
@@ -349,25 +360,63 @@ impl ChallengeEntry {
                 *d = d.replace("%p", &zone.unwrap().zone.to_string())
             }
         }
+        if let Some(d) = &mut description {
+            *d = d.replace("%r", &reps.to_string());
+        }
 
         let zone = match zone {
             Some(z) => Some(z.clone()),
             None => None,
         };
 
-        Challenge {
+        if let Some(action_entry) = self.action {
+            let action = Some(match action_entry {
+                ChallengeActionEntry::Trap {
+                    stuck_minutes: min,
+                    catcher_message,
+                } => ChallengeAction::Trap {
+                    stuck_minutes: match min {
+                        Some(minutes) => minutes,
+                        None => reps,
+                    },
+                    catcher_message,
+                },
+            });
+        }
+
+        Some(Challenge {
             title: title.unwrap_or(config.default_challenge_title.clone()),
             description: description.unwrap_or(config.default_challenge_description.clone()),
             points: points as u64,
+            completable,
             zone,
-        }
+        })
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum ChallengeActionEntry {
+    UncompletableMinutes(Option<u64>), // None -> uses repetitions (%r)
+    Trap {
+        stuck_minutes: Option<u64>, // None -> uses repetitions (%r)
+        catcher_message: Option<String>,
+    },
+}
+
+enum ChallengeAction {
+    UncompletableMinutes(u64),
+    Trap {
+        stuck_minutes: u64,
+        catcher_message: Option<String>,
+    },
 }
 
 struct Challenge {
     title: String,
     description: String,
     points: u64,
+    action: Option<ChallengeAction>,
+    completable: bool,
     zone: Option<ZoneEntry>,
 }
 
