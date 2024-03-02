@@ -43,6 +43,9 @@ struct Config {
     // Number of Catchers
     num_catchers: u64,
 
+    // Number of active challenges per team
+    num_challenges: u64,
+
     // Bounty system
     bounty_base_points: u64,
     bounty_start_points: u64,
@@ -70,6 +73,7 @@ impl Default for Config {
             points_for_no_train: 30,
             points_for_mongus: 50,
             num_catchers: 3,
+            num_challenges: 3,
             bounty_base_points: 100,
             bounty_start_points: 250,
             bounty_percentage: 0.25,
@@ -77,7 +81,7 @@ impl Default for Config {
             specific_minutes: 15,
             default_challenge_title: "[Kreative Titel]".into(),
             default_challenge_description:
-                "Ihr hend Päch, die Challenge isch unlösbar. Ihr müend eu e anderi uswähle.".into(),
+                "Ihr hend Päch, die Challenge isch unlösbar. Ihr müend e anderi uswähle.".into(),
         }
     }
 }
@@ -119,7 +123,7 @@ enum RandomPlaceType {
 }
 
 #[derive(Debug, Collection, Serialize, Deserialize)]
-#[collection(name = "challenge")]
+#[collection(name = "challenge", views = [UnspecificChallengeEntries, SpecificChallengeEntries, GoodChallengeEntries])]
 struct ChallengeEntry {
     kind: ChallengeType,
     kaff: Option<String>,
@@ -136,110 +140,10 @@ struct ChallengeEntry {
     walking_time: i64,
     stationary_time: i64,
     action: Option<ChallengeActionEntry>,
+    active: bool,
+    accepted: bool,
     last_edit: chrono::DateTime<chrono::Local>,
     comment: String,
-}
-
-#[derive(Debug, Clone, Collection, Serialize, Deserialize)]
-#[collection(name = "zone", views = [ZonesByZone, ZonesBySBahn])]
-struct ZoneEntry {
-    zone: u64,
-    num_conn_zones: u64,
-    num_connections: u64,
-    train_through: bool,
-    mongus: bool,
-    s_bahn_zone: bool,
-}
-
-#[derive(Debug, Clone, View, ViewSchema)]
-#[view(collection = ZoneEntry, key = u64, value = u64, name = "by-zone")]
-struct ZonesByZone;
-
-impl CollectionMapReduce for ZonesByZone {
-    fn map<'doc>(
-        &self,
-        document: CollectionDocument<ZoneEntry>,
-    ) -> ViewMapResult<'doc, Self::View> {
-        document
-            .header
-            .emit_key_and_value(document.contents.zone, 1)
-    }
-
-    fn reduce(
-        &self,
-        mappings: &[ViewMappedValue<Self>],
-        _rereduce: bool,
-    ) -> ReduceResult<Self::View> {
-        Ok(mappings.iter().map(|m| m.value).sum())
-    }
-}
-
-#[derive(Debug, Clone, View, ViewSchema)]
-#[view(collection = ZoneEntry, key = bool, value = u64, name = "by-sbahn")]
-struct ZonesBySBahn;
-
-impl CollectionMapReduce for ZonesBySBahn {
-    fn map<'doc>(
-        &self,
-        document: CollectionDocument<ZoneEntry>,
-    ) -> ViewMapResult<'doc, Self::View> {
-        document
-            .header
-            .emit_key_and_value(document.contents.s_bahn_zone, 1)
-    }
-
-    fn reduce(
-        &self,
-        mappings: &[ViewMappedValue<Self>],
-        _rereduce: bool,
-    ) -> ReduceResult<Self::View> {
-        Ok(mappings.iter().map(|m| m.value).sum())
-    }
-}
-
-#[derive(Schema)]
-#[schema(name="session", collections=[])]
-struct SessionSchema {}
-
-#[derive(Debug, Collection, Serialize, Deserialize)]
-#[collection(name = "team")]
-struct TeamEntry {
-    name: String,
-    players: Vec<u64>,
-    discord_channel: Option<u64>,
-}
-
-struct Team {
-    challenges: Vec<Challenge>,
-    is_catcher: bool,
-    points: u64,
-    bounty: u64,
-}
-
-impl ZoneEntry {
-    fn zonic_kaffness(&self, config: &Config) -> u64 {
-        let zonic_kaffness = ((6_f64 - self.num_conn_zones as f64)
-            * config.points_per_connected_zone_less_than_6 as f64
-            + (6_f64 - (self.num_connections as f64).sqrt())
-                * config.points_per_bad_connectivity_index as f64
-            + if self.train_through {
-                0_f64
-            } else {
-                config.points_for_no_train as f64
-            }
-            + if self.mongus {
-                config.points_for_mongus as f64
-            } else {
-                0_f64
-            })
-        .floor();
-        if zonic_kaffness > 0_f64 {
-            zonic_kaffness as u64
-        } else {
-            eprintln!("Engine: zonic kaffness for zone {} <= 0", self.zone);
-            0
-        }
-    }
 }
 
 impl ChallengeEntry {
@@ -249,6 +153,7 @@ impl ChallengeEntry {
         zone_zoneables: bool,
         db: &AsyncDatabase,
     ) -> Option<Challenge> {
+        // TODO: if zoneable and zone specified do something to let me know kthxbye
         let mut points = 0;
         points += self.points;
         if let Some(kaffskala) = self.kaffskala {
@@ -289,6 +194,8 @@ impl ChallengeEntry {
                             entry.document.header.id
                             );
                         zone_entries.push(entry.document.contents.clone())
+                    } else {
+                        zone_entries.push(zones.get(0).unwrap().document.contents.clone())
                     }
                 }
                 Err(err) => {
@@ -369,18 +276,29 @@ impl ChallengeEntry {
             None => None,
         };
 
-        if let Some(action_entry) = self.action {
-            let action = Some(match action_entry {
+        let mut action = None;
+        if let Some(action_entry) = &self.action {
+            action = Some(match action_entry {
                 ChallengeActionEntry::Trap {
                     stuck_minutes: min,
                     catcher_message,
-                } => ChallengeAction::Trap {
-                    stuck_minutes: match min {
-                        Some(minutes) => minutes,
+                } => {
+                    let stuck_minutes = match min {
+                        Some(minutes) => *minutes,
                         None => reps,
-                    },
-                    catcher_message,
-                },
+                    };
+                    ChallengeAction::Trap {
+                        completable_after: chrono::Local::now()
+                            + chrono::Duration::minutes(min.unwrap_or(reps) as i64),
+                        catcher_message: catcher_message.clone(),
+                    }
+                }
+                ChallengeActionEntry::UncompletableMinutes(minutes) => {
+                    ChallengeAction::UncompletableMinutes(
+                        chrono::Local::now()
+                            + chrono::Duration::minutes(minutes.unwrap_or(reps) as i64),
+                    )
+                }
             });
         }
 
@@ -388,9 +306,199 @@ impl ChallengeEntry {
             title: title.unwrap_or(config.default_challenge_title.clone()),
             description: description.unwrap_or(config.default_challenge_description.clone()),
             points: points as u64,
-            completable,
+            action,
             zone,
         })
+    }
+}
+
+#[derive(Debug, Clone, View, ViewSchema)]
+#[view(collection = ChallengeEntry, key = bool, value = u64, name = "good")]
+struct GoodChallengeEntries;
+
+impl CollectionMapReduce for GoodChallengeEntries {
+    fn map<'doc>(
+        &self,
+        document: CollectionDocument<ChallengeEntry>,
+    ) -> ViewMapResult<'doc, Self::View> {
+        document
+            .header
+            .emit_key_and_value(document.contents.active && document.contents.accepted, 1)
+    }
+
+    fn reduce(
+        &self,
+        mappings: &[ViewMappedValue<Self>],
+        _rereduce: bool,
+    ) -> ReduceResult<Self::View> {
+        Ok(mappings.iter().map(|m| m.value).sum())
+    }
+}
+
+#[derive(Debug, Clone, View, ViewSchema)]
+#[view(collection = ChallengeEntry, key = bool, value = u64, name = "unspecific")]
+struct UnspecificChallengeEntries;
+
+impl CollectionMapReduce for UnspecificChallengeEntries {
+    fn map<'doc>(
+        &self,
+        document: CollectionDocument<ChallengeEntry>,
+    ) -> ViewMapResult<'doc, Self::View> {
+        document.header.emit_key_and_value(
+            match document.contents.kind {
+                ChallengeType::Kaff => false,
+                ChallengeType::Zoneable => true,
+                ChallengeType::Unspezifisch => true,
+                ChallengeType::Ortsspezifisch => false,
+                ChallengeType::Regionsspezifisch => true,
+            } && document.contents.accepted
+                && document.contents.active,
+            1,
+        )
+    }
+
+    fn reduce(
+        &self,
+        mappings: &[ViewMappedValue<Self>],
+        _rereduce: bool,
+    ) -> ReduceResult<Self::View> {
+        Ok(mappings.iter().map(|m| m.value).sum())
+    }
+}
+
+#[derive(Debug, Clone, View, ViewSchema)]
+#[view(collection = ChallengeEntry, key = bool, value = u64, name = "specific")]
+struct SpecificChallengeEntries;
+
+impl CollectionMapReduce for SpecificChallengeEntries {
+    fn map<'doc>(
+        &self,
+        document: CollectionDocument<ChallengeEntry>,
+    ) -> ViewMapResult<'doc, Self::View> {
+        document.header.emit_key_and_value(
+            match document.contents.kind {
+                ChallengeType::Kaff => true,
+                ChallengeType::Zoneable => true,
+                ChallengeType::Unspezifisch => false,
+                ChallengeType::Ortsspezifisch => true,
+                ChallengeType::Regionsspezifisch => false,
+            } && document.contents.active
+                && document.contents.accepted,
+            1,
+        )
+    }
+
+    fn reduce(
+        &self,
+        mappings: &[ViewMappedValue<Self>],
+        _rereduce: bool,
+    ) -> ReduceResult<Self::View> {
+        Ok(mappings.iter().map(|m| m.value).sum())
+    }
+}
+
+#[derive(Debug, Clone, Collection, Serialize, Deserialize)]
+#[collection(name = "zone", views = [ZonesByZone, ZonesBySBahn])]
+struct ZoneEntry {
+    zone: u64,
+    num_conn_zones: u64,
+    num_connections: u64,
+    train_through: bool,
+    mongus: bool,
+    s_bahn_zone: bool,
+}
+
+#[derive(Debug, Clone, View, ViewSchema)]
+#[view(collection = ZoneEntry, key = u64, value = u64, name = "by-zone")]
+struct ZonesByZone;
+
+impl CollectionMapReduce for ZonesByZone {
+    fn map<'doc>(
+        &self,
+        document: CollectionDocument<ZoneEntry>,
+    ) -> ViewMapResult<'doc, Self::View> {
+        document
+            .header
+            .emit_key_and_value(document.contents.zone, 1)
+    }
+
+    fn reduce(
+        &self,
+        mappings: &[ViewMappedValue<Self>],
+        _rereduce: bool,
+    ) -> ReduceResult<Self::View> {
+        Ok(mappings.iter().map(|m| m.value).sum())
+    }
+}
+
+#[derive(Debug, Clone, View, ViewSchema)]
+#[view(collection = ZoneEntry, key = bool, value = u64, name = "by-sbahn")]
+struct ZonesBySBahn;
+
+impl CollectionMapReduce for ZonesBySBahn {
+    fn map<'doc>(
+        &self,
+        document: CollectionDocument<ZoneEntry>,
+    ) -> ViewMapResult<'doc, Self::View> {
+        document
+            .header
+            .emit_key_and_value(document.contents.s_bahn_zone, 1)
+    }
+
+    fn reduce(
+        &self,
+        mappings: &[ViewMappedValue<Self>],
+        _rereduce: bool,
+    ) -> ReduceResult<Self::View> {
+        Ok(mappings.iter().map(|m| m.value).sum())
+    }
+}
+
+#[derive(Schema)]
+#[schema(name="session", collections=[])]
+struct SessionSchema {}
+
+#[derive(Debug, Collection, Serialize, Deserialize)]
+#[collection(name = "team")]
+struct TeamEntry {
+    name: String,
+    players: Vec<u64>,
+    discord_channel: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Team {
+    completed_challenges: Vec<Challenge>,
+    challenges: Vec<Challenge>,
+    is_catcher: bool,
+    points: u64,
+    bounty: u64,
+    trophies: u64,
+}
+
+impl ZoneEntry {
+    fn zonic_kaffness(&self, config: &Config) -> u64 {
+        let zonic_kaffness = ((6_f64 - self.num_conn_zones as f64)
+            * config.points_per_connected_zone_less_than_6 as f64
+            + (6_f64 - (self.num_connections as f64).sqrt())
+                * config.points_per_bad_connectivity_index as f64
+            + if self.train_through {
+                0_f64
+            } else {
+                config.points_for_no_train as f64
+            }
+            + if self.mongus {
+                config.points_for_mongus as f64
+            } else {
+                0_f64
+            })
+        .floor();
+        if zonic_kaffness > 0_f64 {
+            zonic_kaffness as u64
+        } else {
+            eprintln!("Engine: zonic kaffness for zone {} <= 0", self.zone);
+            0
+        }
     }
 }
 
@@ -403,33 +511,55 @@ enum ChallengeActionEntry {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum ChallengeAction {
-    UncompletableMinutes(u64),
+    UncompletableMinutes(chrono::DateTime<chrono::Local>),
     Trap {
-        stuck_minutes: u64,
+        completable_after: chrono::DateTime<chrono::Local>,
         catcher_message: Option<String>,
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Challenge {
     title: String,
     description: String,
     points: u64,
     action: Option<ChallengeAction>,
-    completable: bool,
     zone: Option<ZoneEntry>,
+}
+
+impl Challenge {
+    fn completable(&self) -> bool {
+        match &self.action {
+            None => true,
+            Some(action) => match action {
+                ChallengeAction::UncompletableMinutes(t) => &chrono::Local::now() > t,
+                ChallengeAction::Trap {
+                    completable_after: t,
+                    catcher_message: _,
+                } => &chrono::Local::now() > t,
+            },
+        }
+    }
+}
+
+impl PartialEq for Challenge {
+    fn eq(&self, other: &Challenge) -> bool {
+        self.title == other.title
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Game {
+    teams: Vec<Team>,
 }
 
 struct Session {
     name: String,
     db: AsyncDatabase,
     mode: Mode,
-}
-
-pub struct Engine {
-    db: AsyncDatabase,
-    store: AsyncStorage,
-    sessions: Vec<Session>,
+    game: Option<Game>,
 }
 
 impl Session {
@@ -448,6 +578,12 @@ impl Session {
     async fn vroom(&self, command: EngineAction, meta_db: &AsyncDatabase) -> EngineResponse {
         todo!();
     }
+}
+
+pub struct Engine {
+    db: AsyncDatabase,
+    store: AsyncStorage,
+    sessions: Vec<Session>,
 }
 
 impl Engine {
