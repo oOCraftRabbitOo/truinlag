@@ -1,5 +1,3 @@
-use crate::commands;
-use crate::commands::*;
 use crate::engine;
 use crate::error;
 use crate::error::Result;
@@ -12,6 +10,8 @@ use tokio::select;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinError;
 use tokio::time::Duration;
+use truinlag::commands;
+use truinlag::commands::*;
 
 #[derive(Debug)]
 pub enum EngineSignal {

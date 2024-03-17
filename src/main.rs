@@ -1,8 +1,10 @@
-use crate::runtime::manager;
-use std::fs;
-use truinlag::error::Result;
-use truinlag::*;
+mod engine;
+mod error;
+mod runtime;
+use error::Result;
+use runtime::manager;
 
+/*
 fn _get_config(filename: &str) -> Result<Config> {
     Ok(ron::from_str(&fs::read_to_string(&filename)?)?)
 }
@@ -76,15 +78,10 @@ impl Default for TestConfig {
         }
     }
 }
+*/
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // manager().await.unwrap();
-
-    let local = TestConfig {
-        thing: None,
-        thang: Some(69),
-    };
-
+    manager().await.unwrap();
     Ok(())
 }

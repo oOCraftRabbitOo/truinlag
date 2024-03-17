@@ -1,21 +1,21 @@
-use crate::commands;
-use crate::commands::{
-    BroadcastAction, EngineAction, EngineCommand, EngineResponse, Mode, ResponseAction,
-};
-use bonsaidb::core::connection::{AsyncConnection, AsyncStorageConnection};
+use bonsaidb::core::connection::{Connection, StorageConnection};
 use bonsaidb::core::document::{CollectionDocument, Emit};
 use bonsaidb::core::schema::{
     Collection, CollectionMapReduce, ReduceResult, Schema, SerializedCollection, SerializedView,
     View, ViewMapResult, ViewMappedValue, ViewSchema,
 };
 use bonsaidb::local::config::Builder;
-use bonsaidb::local::{config, AsyncDatabase, AsyncStorage};
+use bonsaidb::local::{config, Database, Storage};
 use chrono;
 use partially::Partial;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use truinlag::commands;
+use truinlag::commands::{
+    BroadcastAction, EngineAction, EngineCommand, EngineResponse, Mode, ResponseAction,
+};
 
 pub fn vroom(command: EngineCommand) -> EngineResponse {
     EngineResponse {
@@ -24,8 +24,8 @@ pub fn vroom(command: EngineCommand) -> EngineResponse {
     }
 }
 
-#[derive(Partial, Debug, Serialize, Deserialize)]
-#[partially(derive(Debug, Serialize, Deserialize))]
+#[derive(Partial, Debug, Clone, Serialize, Deserialize)]
+#[partially(derive(Debug, Clone, Serialize, Deserialize, Default))]
 struct Config {
     // Pointcalc
     relative_standard_deviation: f64,
@@ -87,10 +87,10 @@ impl Default for Config {
 }
 
 #[derive(Schema)]
-#[schema(name="engine", collections=[SessionEntry])]
+#[schema(name="engine", collections=[SessionEntry, PlayerEntry, ChallengeEntry, ZoneEntry])]
 struct EngineSchema {}
 
-#[derive(Debug, Collection, Serialize, Deserialize)]
+#[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "session")]
 struct SessionEntry {
     name: String,
@@ -98,6 +98,7 @@ struct SessionEntry {
     config: PartialConfig,
     discord_game_channel: Option<u64>,
     discord_admin_channel: Option<u64>,
+    game: Option<Game>,
 }
 
 #[derive(Debug, Collection, Serialize, Deserialize)]
@@ -151,7 +152,7 @@ impl ChallengeEntry {
         &self,
         config: &Config,
         zone_zoneables: bool,
-        db: &AsyncDatabase,
+        db: &Database,
     ) -> Option<Challenge> {
         // TODO: if zoneable and zone specified do something to let me know kthxbye
         let mut points = 0;
@@ -177,7 +178,6 @@ impl ChallengeEntry {
                 .view::<ZonesByZone>()
                 .with_key(&zone)
                 .query_with_collection_docs()
-                .await
             {
                 Ok(zones) => {
                     if zones.len() == 0 {
@@ -207,7 +207,7 @@ impl ChallengeEntry {
             }
         }
         if zone_zoneables && matches!(self.kind, ChallengeType::Zoneable) {
-            match ZoneEntry::all_async(db).await {
+            match ZoneEntry::all(db).query() {
                 Ok(entries) => {
                     zone_entries = vec![entries
                         .iter()
@@ -222,7 +222,7 @@ impl ChallengeEntry {
             }
         }
         if let Some(place_type) = &self.random_place {
-            match place_type{RandomPlaceType::Zone=>{match ZoneEntry::all_async(db).await{Ok(entries)=>zone_entries=vec![entries.iter().choose(&mut thread_rng()).unwrap().contents.clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve zones from database while choosing random zone, skipping step: {}",err),}}RandomPlaceType::SBahnZone=>{match db.view::<ZonesBySBahn>().with_key(&true).query_with_collection_docs().await{Ok(entries)=>zone_entries=vec![entries.documents.values().choose(&mut thread_rng()).expect("no s-bahn zones found in database").contents.clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve s-bahn zones from database while choosing random s-bahn zone, skipping step: {}",err),}}}
+            match place_type{RandomPlaceType::Zone=>{match ZoneEntry::all(db).query(){Ok(entries)=>zone_entries=vec![entries.iter().choose(&mut thread_rng()).unwrap().contents.clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve zones from database while choosing random zone, skipping step: {}",err),}}RandomPlaceType::SBahnZone=>{match db.view::<ZonesBySBahn>().with_key(&true).query_with_collection_docs(){Ok(entries)=>zone_entries=vec![entries.documents.values().choose(&mut thread_rng()).expect("no s-bahn zones found in database").contents.clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve s-bahn zones from database while choosing random s-bahn zone, skipping step: {}",err),}}}
         }
         let (zone, z_points) = zone_entries.iter().fold((None, 0), |acc, z| {
             if acc.1 == 0 || acc.1 > z.zonic_kaffness(config) {
@@ -455,7 +455,7 @@ impl CollectionMapReduce for ZonesBySBahn {
 }
 
 #[derive(Schema)]
-#[schema(name="session", collections=[])]
+#[schema(name="session", collections=[TeamEntry])]
 struct SessionSchema {}
 
 #[derive(Debug, Collection, Serialize, Deserialize)]
@@ -468,12 +468,33 @@ struct TeamEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Team {
+    name: String,
+    id: u64,
+    players: Vec<u64>,
+    discord_channel: Option<u64>,
     completed_challenges: Vec<Challenge>,
     challenges: Vec<Challenge>,
     is_catcher: bool,
     points: u64,
     bounty: u64,
     trophies: u64,
+}
+
+impl Team {
+    fn new(name: String, id: u64, players: Vec<u64>, discord_channel: Option<u64>) -> Self {
+        Team {
+            name,
+            id,
+            players,
+            discord_channel,
+            completed_challenges: Vec::new(),
+            challenges: Vec::new(),
+            points: 0,
+            is_catcher: false,
+            bounty: 0,
+            trophies: 0,
+        }
+    }
 }
 
 impl ZoneEntry {
@@ -557,59 +578,93 @@ struct Game {
 
 struct Session {
     name: String,
-    db: AsyncDatabase,
+    db: Database,
+    meta_db: Database,
     mode: Mode,
+    config: PartialConfig,
     game: Option<Game>,
 }
 
 impl Session {
-    async fn init(entry: SessionEntry, store: &AsyncStorage) -> Self {
-        let db = store
-            .create_database::<SessionSchema>(&entry.name, true)
-            .await
-            .unwrap();
-        Session {
-            name: entry.name,
-            db,
-            mode: entry.mode,
+    fn vroom(&mut self, command: EngineAction, meta_db: &Database) -> EngineResponse {
+        match EngineAction {
+            EngineAction::Start => match self.game {
+                Some(_) => EngineResponse {
+                    response_action: ResponseAction::Error(commands::Error::GameInProgress),
+                    broadcast_action: None,
+                },
+                None => match TeamEntry::all(&self.db).query() {
+                    Err(err) => {
+                        println!(
+                            "Error retrieving team entries from database in {}: {}",
+                            self.name, err
+                        );
+                        EngineResponse {
+                            response_action: ResponseAction::Error(commands::Error::InternalError),
+                            broadcast_action: None,
+                        }
+                    }
+                    Ok(mut team_entries) => {
+                        let teams = team_entries
+                            .into_iter()
+                            .map(|entry| {
+                                Team::new(
+                                    entry.contents.name,
+                                    entry.header.id,
+                                    entry.contents.players,
+                                    entry.contents.discord_channel,
+                                )
+                            })
+                            .collect();
+                    }
+                },
+            },
         }
     }
+}
 
-    async fn vroom(&self, command: EngineAction, meta_db: &AsyncDatabase) -> EngineResponse {
-        todo!();
+impl SessionEntry {
+    fn init(&self, store: &Storage, meta_db: Database) -> Session {
+        let db = store
+            .create_database::<SessionSchema>(&self.name, true)
+            .unwrap();
+        Session {
+            name: self.name.clone(),
+            db,
+            mode: self.mode.clone(),
+            game: self.game.clone(),
+            config: self.config.clone(),
+            meta_db,
+        }
     }
 }
 
 pub struct Engine {
-    db: AsyncDatabase,
-    store: AsyncStorage,
+    db: Database,
+    store: Storage,
     sessions: Vec<Session>,
 }
 
 impl Engine {
-    pub async fn init(storage_path: &Path) -> Self {
-        let store = AsyncStorage::open(
+    pub fn init(storage_path: &Path) -> Self {
+        let store = Storage::open(
             config::StorageConfiguration::new(storage_path)
                 .with_schema::<EngineSchema>()
                 .unwrap()
                 .with_schema::<SessionSchema>()
                 .unwrap(),
         )
-        .await
         .unwrap();
         let db = store
             .create_database::<EngineSchema>("engine", true)
-            .await
             .unwrap();
 
-        let sessions = futures::future::join_all(
-            SessionEntry::all_async(&db)
-                .await
-                .unwrap()
-                .into_iter()
-                .map(|doc| Session::init(doc.contents, &store)),
-        )
-        .await;
+        let sessions = SessionEntry::all(&db)
+            .query()
+            .unwrap()
+            .into_iter()
+            .map(|doc| doc.contents.clone().init(&store, db.clone()))
+            .collect();
 
         Engine {
             store,
@@ -621,7 +676,7 @@ impl Engine {
     pub async fn vroom(&self, command: EngineCommand) -> EngineResponse {
         match command.session {
             Some(name) => match self.sessions.iter().find(|item| item.name == name) {
-                Some(session) => session.vroom(command.action, &self.db).await,
+                Some(session) => session.vroom(command.action, &self.db),
                 None => EngineResponse {
                     response_action: ResponseAction::Error(commands::Error::SessionNotFound(name)),
                     broadcast_action: None,

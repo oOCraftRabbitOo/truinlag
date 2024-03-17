@@ -56,7 +56,6 @@ pub enum ResponseAction {
         completer: String,
         completed: String,
     },
-    Start(Config),
     End,
     MakeCatcher(String),
     MakeRunner(String),
@@ -88,4 +87,6 @@ pub enum BroadcastAction {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Error {
     SessionNotFound(String),
+    GameInProgress,
+    InternalError,
 }
