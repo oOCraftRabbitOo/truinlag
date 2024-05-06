@@ -7,15 +7,17 @@ use bonsaidb::core::schema::{
 use bonsaidb::local::config::Builder;
 use bonsaidb::local::{config, Database, Storage};
 use chrono;
+use geo::Point;
 use partially::Partial;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use truinlag::commands;
+use strsim::normalized_damerau_levenshtein as strcmp;
 use truinlag::commands::{
     BroadcastAction, EngineAction, EngineCommand, EngineResponse, Mode, ResponseAction,
 };
+use truinlag::*;
 
 pub fn vroom(command: EngineCommand) -> EngineResponse {
     EngineResponse {
@@ -58,6 +60,9 @@ struct Config {
     // Fallback Defaults
     default_challenge_title: String,
     default_challenge_description: String,
+
+    // additional options
+    team_colours: Vec<Colour>,
 }
 
 impl Default for Config {
@@ -82,33 +87,84 @@ impl Default for Config {
             default_challenge_title: "[Kreative Titel]".into(),
             default_challenge_description:
                 "Ihr hend Päch, die Challenge isch unlösbar. Ihr müend e anderi uswähle.".into(),
+            team_colours: vec![
+                Colour {
+                    r: 93,
+                    g: 156,
+                    b: 236,
+                },
+                Colour {
+                    r: 79,
+                    g: 193,
+                    b: 233,
+                },
+                Colour {
+                    r: 72,
+                    g: 207,
+                    b: 173,
+                },
+                Colour {
+                    r: 160,
+                    g: 212,
+                    b: 104,
+                },
+                Colour {
+                    r: 255,
+                    g: 206,
+                    b: 84,
+                },
+                Colour {
+                    r: 252,
+                    g: 110,
+                    b: 81,
+                },
+                Colour {
+                    r: 237,
+                    g: 85,
+                    b: 101,
+                },
+                Colour {
+                    r: 171,
+                    g: 146,
+                    b: 236,
+                },
+                Colour {
+                    r: 236,
+                    g: 135,
+                    b: 192,
+                },
+            ],
         }
     }
 }
 
 #[derive(Schema)]
-#[schema(name="engine", collections=[SessionEntry, PlayerEntry, ChallengeEntry, ZoneEntry])]
+#[schema(name="engine", collections=[Session, Player, ChallengeEntry, ZoneEntry])]
 struct EngineSchema {}
 
 #[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "session")]
-struct SessionEntry {
+struct Session {
     name: String,
+    teams: Vec<Team>,
     mode: Mode,
     config: PartialConfig,
+    discord_server_id: Option<u64>,
     discord_game_channel: Option<u64>,
     discord_admin_channel: Option<u64>,
     game: Option<Game>,
+    past_games: Vec<PastGame>,
 }
 
 #[derive(Debug, Collection, Serialize, Deserialize)]
 #[collection(name = "player")]
-struct PlayerEntry {
+struct Player {
     name: String,
+    passphrase: String,
     discord_id: Option<u64>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 enum ChallengeType {
     Kaff,
     Ortsspezifisch,
@@ -117,13 +173,13 @@ enum ChallengeType {
     Zoneable,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 enum RandomPlaceType {
     Zone,
     SBahnZone,
 }
 
-#[derive(Debug, Collection, Serialize, Deserialize)]
+#[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "challenge", views = [UnspecificChallengeEntries, SpecificChallengeEntries, GoodChallengeEntries])]
 struct ChallengeEntry {
     kind: ChallengeType,
@@ -153,7 +209,7 @@ impl ChallengeEntry {
         config: &Config,
         zone_zoneables: bool,
         db: &Database,
-    ) -> Option<Challenge> {
+    ) -> Option<OpenChallenge> {
         // TODO: if zoneable and zone specified do something to let me know kthxbye
         let mut points = 0;
         points += self.points;
@@ -193,9 +249,9 @@ impl ChallengeEntry {
                             zone,
                             entry.document.header.id
                             );
-                        zone_entries.push(entry.document.contents.clone())
+                        zone_entries.push(entry.document.clone())
                     } else {
-                        zone_entries.push(zones.get(0).unwrap().document.contents.clone())
+                        zone_entries.push(zones.get(0).unwrap().document.clone())
                     }
                 }
                 Err(err) => {
@@ -209,12 +265,7 @@ impl ChallengeEntry {
         if zone_zoneables && matches!(self.kind, ChallengeType::Zoneable) {
             match ZoneEntry::all(db).query() {
                 Ok(entries) => {
-                    zone_entries = vec![entries
-                        .iter()
-                        .choose(&mut thread_rng())
-                        .unwrap()
-                        .contents
-                        .clone()]
+                    zone_entries = vec![entries.iter().choose(&mut thread_rng()).unwrap().clone()]
                 }
                 Err(err) => {
                     eprintln!("Engine: Couldn't retreive zones from database while selecting random zone for zoneable, skipping step: {}", err)
@@ -222,11 +273,11 @@ impl ChallengeEntry {
             }
         }
         if let Some(place_type) = &self.random_place {
-            match place_type{RandomPlaceType::Zone=>{match ZoneEntry::all(db).query(){Ok(entries)=>zone_entries=vec![entries.iter().choose(&mut thread_rng()).unwrap().contents.clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve zones from database while choosing random zone, skipping step: {}",err),}}RandomPlaceType::SBahnZone=>{match db.view::<ZonesBySBahn>().with_key(&true).query_with_collection_docs(){Ok(entries)=>zone_entries=vec![entries.documents.values().choose(&mut thread_rng()).expect("no s-bahn zones found in database").contents.clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve s-bahn zones from database while choosing random s-bahn zone, skipping step: {}",err),}}}
+            match place_type{RandomPlaceType::Zone=>{match ZoneEntry::all(db).query(){Ok(entries)=>zone_entries=vec![entries.iter().choose(&mut thread_rng()).unwrap().clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve zones from database while choosing random zone, skipping step: {}",err),}}RandomPlaceType::SBahnZone=>{match db.view::<ZonesBySBahn>().with_key(&true).query_with_collection_docs(){Ok(entries)=>zone_entries=vec![entries.documents.values().choose(&mut thread_rng()).expect("no s-bahn zones found in database").clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve s-bahn zones from database while choosing random s-bahn zone, skipping step: {}",err),}}}
         }
         let (zone, z_points) = zone_entries.iter().fold((None, 0), |acc, z| {
-            if acc.1 == 0 || acc.1 > z.zonic_kaffness(config) {
-                (Some(z), z.zonic_kaffness(config))
+            if acc.1 == 0 || acc.1 > z.contents.zonic_kaffness(config) {
+                (Some(z), z.contents.zonic_kaffness(config))
             } else {
                 acc
             }
@@ -248,7 +299,7 @@ impl ChallengeEntry {
         }
         if let Some(_) = self.random_place {
             if let Some(t) = &mut title {
-                *t = t.replace("%p", &zone.unwrap().zone.to_string())
+                *t = t.replace("%p", &zone.unwrap().contents.zone.to_string())
             }
         }
         if let Some(t) = &mut title {
@@ -264,7 +315,7 @@ impl ChallengeEntry {
         }
         if let Some(_) = self.random_place {
             if let Some(d) = &mut description {
-                *d = d.replace("%p", &zone.unwrap().zone.to_string())
+                *d = d.replace("%p", &zone.unwrap().contents.zone.to_string())
             }
         }
         if let Some(d) = &mut description {
@@ -272,7 +323,7 @@ impl ChallengeEntry {
         }
 
         let zone = match zone {
-            Some(z) => Some(z.clone()),
+            Some(z) => Some(z.header.id),
             None => None,
         };
 
@@ -302,7 +353,7 @@ impl ChallengeEntry {
             });
         }
 
-        Some(Challenge {
+        Some(OpenChallenge {
             title: title.unwrap_or(config.default_challenge_title.clone()),
             description: description.unwrap_or(config.default_challenge_description.clone()),
             points: points as u64,
@@ -454,45 +505,75 @@ impl CollectionMapReduce for ZonesBySBahn {
     }
 }
 
-#[derive(Schema)]
-#[schema(name="session", collections=[TeamEntry])]
-struct SessionSchema {}
-
-#[derive(Debug, Collection, Serialize, Deserialize)]
-#[collection(name = "team")]
-struct TeamEntry {
-    name: String,
-    players: Vec<u64>,
-    discord_channel: Option<u64>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Team {
     name: String,
-    id: u64,
     players: Vec<u64>,
     discord_channel: Option<u64>,
-    completed_challenges: Vec<Challenge>,
-    challenges: Vec<Challenge>,
-    is_catcher: bool,
-    points: u64,
-    bounty: u64,
+    role: TeamRole,
+    colour: Colour,
+    challenges: Vec<OpenChallenge>,
+    completed_challenges: Vec<CompletedChallenge>,
+    catcher_periods: Vec<CatcherPeriod>,
+    caught_periods: Vec<CaughtPeriod>,
+    trophy_periods: Vec<TrophyPeriod>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrophyPeriod {
     trophies: u64,
+    points_spent: u64,
+    position_start_index: u64,
+    position_end_index: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CaughtPeriod {
+    catcher_team: u64,
+    bounty: u64,
+    position_start_index: u64,
+    position_end_index: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CatcherPeriod {
+    caught_team: u64,
+    bounty: u64,
+    position_start_index: u64,
+    position_end_index: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CompletedChallenge {
+    name: String,
+    description: String,
+    zone: Option<u64>,
+    points: u64,
+    photo: truinlag::Jpeg,
+    time: chrono::NaiveTime,
+    position_start_index: u64,
+    position_end_index: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum TeamRole {
+    Runner,
+    Catcher,
 }
 
 impl Team {
-    fn new(name: String, id: u64, players: Vec<u64>, discord_channel: Option<u64>) -> Self {
+    fn new(name: String, players: Vec<u64>, discord_channel: Option<u64>, colour: Colour) -> Self {
         Team {
             name,
-            id,
             players,
             discord_channel,
+            colour,
             completed_challenges: Vec::new(),
             challenges: Vec::new(),
-            points: 0,
-            is_catcher: false,
-            bounty: 0,
-            trophies: 0,
+            role: TeamRole::Runner,
+            catcher_periods: Vec::new(),
+            caught_periods: Vec::new(),
+            trophy_periods: Vec::new(),
         }
     }
 }
@@ -523,7 +604,7 @@ impl ZoneEntry {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum ChallengeActionEntry {
     UncompletableMinutes(Option<u64>), // None -> uses repetitions (%r)
     Trap {
@@ -542,15 +623,15 @@ enum ChallengeAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Challenge {
+struct OpenChallenge {
     title: String,
     description: String,
     points: u64,
     action: Option<ChallengeAction>,
-    zone: Option<ZoneEntry>,
+    zone: Option<u64>, // id for ZoneEntry collection in db
 }
 
-impl Challenge {
+impl OpenChallenge {
     fn completable(&self) -> bool {
         match &self.action {
             None => true,
@@ -565,124 +646,218 @@ impl Challenge {
     }
 }
 
-impl PartialEq for Challenge {
-    fn eq(&self, other: &Challenge) -> bool {
+impl PartialEq for OpenChallenge {
+    fn eq(&self, other: &OpenChallenge) -> bool {
         self.title == other.title
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Game {
+    name: String,
+    date: chrono::NaiveDate,
+    mode: Mode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PastGame {
+    name: String,
+    date: chrono::NaiveDate,
+    mode: Mode,
+    challenge_entries: Vec<ChallengeEntry>,
     teams: Vec<Team>,
 }
 
-struct Session {
-    name: String,
-    db: Database,
-    meta_db: Database,
-    mode: Mode,
-    config: PartialConfig,
-    game: Option<Game>,
-}
-
 impl Session {
-    fn vroom(&mut self, command: EngineAction, meta_db: &Database) -> EngineResponse {
-        match EngineAction {
-            EngineAction::Start => match self.game {
+    fn config(&self) -> Config {
+        let mut cfg = Config::default();
+        cfg.apply_some(self.config.clone());
+        cfg
+    }
+    fn assign(&mut self, team: usize, player: u64) {
+        for t in self.teams.iter_mut() {
+            t.players = t
+                .players
+                .iter()
+                .filter(|&&p| p != player)
+                .map(|&e| e)
+                .collect();
+        }
+        if (team as usize) < self.teams.len() {
+            self.teams[team as usize].players.push(player);
+        }
+    }
+    fn vroom(&mut self, command: EngineAction, db: &Database) -> EngineResponse {
+        use EngineAction::*;
+        match command {
+            AddTeam {
+                name,
+                players,
+                discord_channel,
+                colour,
+            } => {
+                if let Some(nom) = self
+                    .teams
+                    .iter()
+                    .map(|t| t.name.clone())
+                    .find(|n| strcmp(&n.to_lowercase(), &name.to_lowercase()) >= 0.85)
+                {
+                    EngineResponse {
+                        response_action: ResponseAction::Error(commands::Error::TeamExists(nom)),
+                        broadcast_action: None,
+                    }
+                } else {
+                    let colour = match colour {
+                        Some(c) => c,
+                        None => {
+                            match self
+                                .config()
+                                .team_colours
+                                .iter()
+                                .filter(|&&c| self.teams.iter().any(|t| t.colour == c))
+                                .next()
+                            {
+                                Some(&colour) => colour,
+                                None => Colour { r: 0, g: 0, b: 0 },
+                            }
+                        }
+                    };
+                    self.teams
+                        .push(Team::new(name, Vec::new(), discord_channel, colour));
+                    for p in players {
+                        self.assign(self.teams.len() - 1, p);
+                    }
+                    EngineResponse {
+                        response_action: ResponseAction::Success,
+                        broadcast_action: None,
+                    }
+                }
+            }
+
+            Start => match self.game {
                 Some(_) => EngineResponse {
                     response_action: ResponseAction::Error(commands::Error::GameInProgress),
                     broadcast_action: None,
                 },
-                None => match TeamEntry::all(&self.db).query() {
-                    Err(err) => {
-                        println!(
-                            "Error retrieving team entries from database in {}: {}",
-                            self.name, err
-                        );
-                        EngineResponse {
-                            response_action: ResponseAction::Error(commands::Error::InternalError),
-                            broadcast_action: None,
-                        }
-                    }
-                    Ok(mut team_entries) => {
-                        let teams = team_entries
-                            .into_iter()
-                            .map(|entry| {
-                                Team::new(
-                                    entry.contents.name,
-                                    entry.header.id,
-                                    entry.contents.players,
-                                    entry.contents.discord_channel,
-                                )
-                            })
-                            .collect();
-                    }
-                },
+                None => {
+                    todo!();
+                }
             },
-        }
-    }
-}
-
-impl SessionEntry {
-    fn init(&self, store: &Storage, meta_db: Database) -> Session {
-        let db = store
-            .create_database::<SessionSchema>(&self.name, true)
-            .unwrap();
-        Session {
-            name: self.name.clone(),
-            db,
-            mode: self.mode.clone(),
-            game: self.game.clone(),
-            config: self.config.clone(),
-            meta_db,
+            _ => EngineResponse {
+                response_action: ResponseAction::Error(commands::Error::SessionSupplied),
+                broadcast_action: None,
+            },
         }
     }
 }
 
 pub struct Engine {
     db: Database,
-    store: Storage,
-    sessions: Vec<Session>,
+    // store: Storage, --- Don't need that no more, everything stored in the db
+    // sessions: Vec<Session>, --- see above
 }
 
 impl Engine {
     pub fn init(storage_path: &Path) -> Self {
-        let store = Storage::open(
+        let db = Storage::open(
             config::StorageConfiguration::new(storage_path)
                 .with_schema::<EngineSchema>()
-                .unwrap()
-                .with_schema::<SessionSchema>()
                 .unwrap(),
         )
+        .unwrap()
+        .create_database::<EngineSchema>("engine", true)
         .unwrap();
-        let db = store
-            .create_database::<EngineSchema>("engine", true)
-            .unwrap();
 
-        let sessions = SessionEntry::all(&db)
+        /*
+        let sessions = Session::all(&db)
             .query()
             .unwrap()
             .into_iter()
             .map(|doc| doc.contents.clone().init(&store, db.clone()))
             .collect();
+        */
 
-        Engine {
-            store,
-            db,
-            sessions,
-        }
+        Engine { db }
     }
 
-    pub async fn vroom(&self, command: EngineCommand) -> EngineResponse {
+    pub fn vroom(&self, command: EngineCommand) -> EngineResponse {
+        use EngineAction::*;
         match command.session {
-            Some(name) => match self.sessions.iter().find(|item| item.name == name) {
-                Some(session) => session.vroom(command.action, &self.db),
-                None => EngineResponse {
-                    response_action: ResponseAction::Error(commands::Error::SessionNotFound(name)),
+            Some(id) => match Session::get(&id, &self.db) {
+                Err(err) => {
+                    eprintln!("Couldn't retrieve session from db: {}", err);
+                    EngineResponse {
+                        response_action: ResponseAction::Error(commands::Error::InternalError),
+                        broadcast_action: None,
+                    }
+                }
+                Ok(maybedoc) => match maybedoc {
+                    None => EngineResponse {
+                        response_action: ResponseAction::Error(commands::Error::NotFound),
+                        broadcast_action: None,
+                    },
+                    Some(mut doc) => {
+                        let response = doc.contents.vroom(command.action, &self.db);
+                        doc.update(&self.db).unwrap();
+                        response
+                    }
+                },
+            },
+            None => match command.action {
+                AddPlayer {
+                    name,
+                    discord_id,
+                    passphrase,
+                } => match Player::all(&self.db).query() {
+                    Err(err) => {
+                        println!("Couldn't retreive all players from db: {}", err);
+                        EngineResponse {
+                            response_action: ResponseAction::Error(commands::Error::InternalError),
+                            broadcast_action: None,
+                        }
+                    }
+                    Ok(players) => {
+                        if let Some(_) = players
+                            .iter()
+                            .map(|p| &p.contents.passphrase)
+                            .find(|&pp| pp == &passphrase)
+                        {
+                            EngineResponse {
+                                response_action: ResponseAction::Error(
+                                    commands::Error::AlreadyExists,
+                                ),
+                                broadcast_action: None,
+                            }
+                        } else {
+                            match (Player {
+                                name,
+                                discord_id,
+                                passphrase,
+                            })
+                            .push_into(&self.db)
+                            {
+                                Err(err) => {
+                                    println!("Couldn't add player to db: {}", err);
+                                    EngineResponse {
+                                        response_action: ResponseAction::Error(
+                                            commands::Error::InternalError,
+                                        ),
+                                        broadcast_action: None,
+                                    }
+                                }
+                                Ok(doc) => EngineResponse {
+                                    response_action: ResponseAction::AddedPlayer(doc.header.id),
+                                    broadcast_action: None,
+                                },
+                            }
+                        }
+                    }
+                },
+                _ => EngineResponse {
+                    response_action: ResponseAction::Error(commands::Error::NoSessionSupplied),
                     broadcast_action: None,
                 },
             },
-            None => todo!(),
         }
     }
 }

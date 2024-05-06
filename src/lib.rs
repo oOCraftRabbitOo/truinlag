@@ -1,5 +1,47 @@
+use image::{DynamicImage, ImageFormat};
+use serde::{Deserialize, Serialize};
+
 pub mod api;
 pub mod commands;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct Colour {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Jpeg {
+    data: Vec<u8>,
+}
+
+impl TryFrom<DynamicImage> for Jpeg {
+    type Error = image::ImageError;
+    fn try_from(img: DynamicImage) -> Result<Self, image::ImageError> {
+        Self::from_img(img)
+    }
+}
+
+impl TryFrom<Jpeg> for DynamicImage {
+    type Error = image::ImageError;
+    fn try_from(jpeg: Jpeg) -> Result<Self, image::ImageError> {
+        jpeg.try_into_img()
+    }
+}
+
+impl Jpeg {
+    pub fn from_img(img: DynamicImage) -> Result<Self, image::ImageError> {
+        let mut buff = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut buff, ImageFormat::Jpeg)?;
+        Ok(Self {
+            data: buff.into_inner(),
+        })
+    }
+    pub fn try_into_img(self) -> Result<DynamicImage, image::ImageError> {
+        image::load_from_memory_with_format(&self.data, ImageFormat::Jpeg)
+    }
+}
 
 /*
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]

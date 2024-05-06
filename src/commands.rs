@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EngineCommand {
-    pub session: Option<String>,
+    pub session: Option<u64>,
     pub action: EngineAction,
 }
 
@@ -39,11 +39,27 @@ pub struct ResponsePackage {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum EngineAction {
-    Catch { catcher: String, caught: String },
-    Complete { completer: String, completed: u32 },
+    AddPlayer {
+        name: String,
+        discord_id: Option<u64>,
+        passphrase: String,
+    },
+    AddTeam {
+        name: String,
+        players: Vec<u64>,
+        discord_channel: Option<u64>,
+        colour: Option<Colour>,
+    },
+    Catch {
+        catcher: String,
+        caught: String,
+    },
+    Complete {
+        completer: String,
+        completed: u32,
+    },
     Start,
     Stop,
-    Status,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -59,12 +75,8 @@ pub enum ResponseAction {
     End,
     MakeCatcher(String),
     MakeRunner(String),
-    Status {
-        raw_challenges: Vec<RawChallenge>,
-        players: Vec<Player>,
-        teams: Vec<TeamOwningPlayers>,
-    },
     Error(Error),
+    AddedPlayer(u64),
     Success,
 }
 
@@ -86,7 +98,11 @@ pub enum BroadcastAction {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Error {
-    SessionNotFound(String),
+    NoSessionSupplied,
+    SessionSupplied,
+    NotFound,
+    TeamExists(String),
+    AlreadyExists,
     GameInProgress,
     InternalError,
 }

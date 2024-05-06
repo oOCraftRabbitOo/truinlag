@@ -1,6 +1,6 @@
 mod engine;
 mod error;
-mod runtime;
+pub mod runtime;
 use error::Result;
 use runtime::manager;
 
