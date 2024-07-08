@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod api;
 pub mod commands;
+pub mod engine;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Colour {

@@ -1,3 +1,7 @@
+use crate::commands::{
+    BroadcastAction, EngineAction, EngineCommand, EngineResponse, Mode, ResponseAction,
+};
+use crate::*;
 use bonsaidb::core::connection::{Connection, StorageConnection};
 use bonsaidb::core::document::{CollectionDocument, Emit};
 use bonsaidb::core::schema::{
@@ -14,15 +18,11 @@ use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use strsim::normalized_damerau_levenshtein as strcmp;
-use truinlag::commands::{
-    BroadcastAction, EngineAction, EngineCommand, EngineResponse, Mode, ResponseAction,
-};
-use truinlag::*;
 
 pub fn vroom(command: EngineCommand) -> EngineResponse {
     EngineResponse {
         response_action: ResponseAction::Success,
-        broadcast_action: Some(BroadcastAction::Success),
+        broadcast_action: Some(BroadcastAction::Ping(None)),
     }
 }
 
@@ -162,6 +162,7 @@ struct Player {
     name: String,
     passphrase: String,
     discord_id: Option<u64>,
+    session: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -226,7 +227,7 @@ impl ChallengeEntry {
             .clone()
             .choose(&mut thread_rng())
             .unwrap_or(0);
-        points += reps as i64 * self.points_per_rep as i64;
+        points += reps as i64 * self.points_per_rep;
         let mut zone_entries = vec![];
         let initial_zones = self.zones.clone();
         for zone in initial_zones {
@@ -506,7 +507,7 @@ impl CollectionMapReduce for ZonesBySBahn {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Team {
+pub struct Team {
     name: String,
     players: Vec<u64>,
     discord_channel: Option<u64>,
@@ -549,7 +550,7 @@ struct CompletedChallenge {
     description: String,
     zone: Option<u64>,
     points: u64,
-    photo: truinlag::Jpeg,
+    photo: crate::Jpeg,
     time: chrono::NaiveTime,
     position_start_index: u64,
     position_end_index: u64,
@@ -653,7 +654,7 @@ impl PartialEq for OpenChallenge {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Game {
+pub struct Game {
     name: String,
     date: chrono::NaiveDate,
     mode: Mode,
@@ -833,6 +834,7 @@ impl Engine {
                                 name,
                                 discord_id,
                                 passphrase,
+                                session: None,
                             })
                             .push_into(&self.db)
                             {

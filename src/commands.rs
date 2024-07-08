@@ -1,5 +1,12 @@
 use super::*;
+pub use engine::{Game, Team};
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum TeamRole {
+    Runner,
+    Catcher,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EngineCommand {
@@ -60,23 +67,20 @@ pub enum EngineAction {
     },
     Start,
     Stop,
+    Ping(Option<String>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ResponseAction {
-    Catch {
-        catcher: String,
-        caught: String,
-    },
-    Complete {
-        completer: String,
-        completed: String,
-    },
-    End,
-    MakeCatcher(String),
-    MakeRunner(String),
     Error(Error),
+    AddedTeam(u64),
     AddedPlayer(u64),
+    SendState {
+        teams: Vec<Team>,
+        mode: Mode,
+        id: u64,
+        game: Option<Game>,
+    },
     Success,
 }
 
@@ -92,8 +96,7 @@ pub enum BroadcastAction {
     },
     Start,
     End,
-    Crash,
-    Success,
+    Ping(Option<String>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
