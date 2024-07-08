@@ -506,6 +506,26 @@ impl CollectionMapReduce for ZonesBySBahn {
     }
 }
 
+#[derive(Debug, Clone, View, ViewSchema)]
+#[view(collection = Player, key = String, value = u64, name = "by-passphrase")]
+struct PlayersByPassphrase;
+
+impl CollectionMapReduce for PlayersByPassphrase {
+    fn map<'doc>(&self, document: CollectionDocument<Player>) -> ViewMapResult<'doc, Self::View> {
+        document
+            .header
+            .emit_key_and_value(document.contents.passphrase, 1)
+    }
+
+    fn reduce(
+        &self,
+        mappings: &[ViewMappedValue<Self>],
+        _rereduce: bool,
+    ) -> ReduceResult<Self::View> {
+        Ok(mappings.iter().map(|m| m.value).sum())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Team {
     name: String,
@@ -805,6 +825,30 @@ impl Engine {
                 },
             },
             None => match command.action {
+                GetPlayerByPassphrase(passphrase) => {
+                    let doc = self
+                        .db
+                        .view::<PlayersByPassphrase>()
+                        .with_key(&passphrase)
+                        .query_with_collection_docs()
+                        .unwrap();
+                    match doc.len() {
+                        0 => EngineResponse {
+                            response_action: ResponseAction::Error(commands::Error::NotFound),
+                            broadcast_action: None,
+                        },
+                        1 => EngineResponse {
+                            response_action: ResponseAction::Player(
+                                doc.get(0).unwrap().document.header.id,
+                            ),
+                            broadcast_action: None,
+                        },
+                        _ => EngineResponse {
+                            response_action: ResponseAction::Error(commands::Error::InternalError),
+                            broadcast_action: None,
+                        },
+                    }
+                }
                 AddPlayer {
                     name,
                     discord_id,
@@ -848,7 +892,7 @@ impl Engine {
                                     }
                                 }
                                 Ok(doc) => EngineResponse {
-                                    response_action: ResponseAction::AddedPlayer(doc.header.id),
+                                    response_action: ResponseAction::Player(doc.header.id),
                                     broadcast_action: None,
                                 },
                             }

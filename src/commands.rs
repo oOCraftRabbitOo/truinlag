@@ -65,6 +65,7 @@ pub enum EngineAction {
         completer: String,
         completed: u32,
     },
+    GetPlayerByPassphrase(String),
     Start,
     Stop,
     Ping(Option<String>),
@@ -73,8 +74,8 @@ pub enum EngineAction {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ResponseAction {
     Error(Error),
-    AddedTeam(u64),
-    AddedPlayer(u64),
+    Team(u64),
+    Player(u64),
     SendState {
         teams: Vec<Team>,
         mode: Mode,
