@@ -1,23 +1,10 @@
 use super::*;
-pub use engine::{Game, Team};
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum TeamRole {
-    Runner,
-    Catcher,
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EngineCommand {
     pub session: Option<u64>,
     pub action: EngineAction,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum Mode {
-    Traditional,
-    Gfrorefurz,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -78,7 +65,6 @@ pub enum ResponseAction {
     Player(u64),
     SendState {
         teams: Vec<Team>,
-        mode: Mode,
         id: u64,
         game: Option<Game>,
     },

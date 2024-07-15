@@ -1,7 +1,3 @@
-use crate::commands::{
-    BroadcastAction, EngineAction, EngineCommand, EngineResponse, Mode, ResponseAction,
-};
-use crate::*;
 use bonsaidb::core::connection::{Connection, StorageConnection};
 use bonsaidb::core::document::{CollectionDocument, Emit};
 use bonsaidb::core::schema::{
@@ -18,6 +14,10 @@ use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use strsim::normalized_damerau_levenshtein as strcmp;
+use truinlag::commands::{
+    BroadcastAction, EngineAction, EngineCommand, EngineResponse, ResponseAction,
+};
+use truinlag::*;
 
 pub fn vroom(command: EngineCommand) -> EngineResponse {
     EngineResponse {
@@ -139,14 +139,14 @@ impl Default for Config {
 }
 
 #[derive(Schema)]
-#[schema(name="engine", collections=[Session, Player, ChallengeEntry, ZoneEntry])]
+#[schema(name="engine", collections=[Session, PlayerEntry, ChallengeEntry, ZoneEntry])]
 struct EngineSchema {}
 
 #[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "session")]
 struct Session {
     name: String,
-    teams: Vec<Team>,
+    teams: Vec<TeamEntry>,
     mode: Mode,
     config: PartialConfig,
     discord_server_id: Option<u64>,
@@ -158,11 +158,20 @@ struct Session {
 
 #[derive(Debug, Collection, Serialize, Deserialize)]
 #[collection(name = "player")]
-struct Player {
+struct PlayerEntry {
     name: String,
     passphrase: String,
     discord_id: Option<u64>,
     session: Option<u64>,
+}
+
+impl PlayerEntry {
+    pub fn to_sendable(&self, id: u64) -> truinlag::Player {
+        truinlag::Player {
+            name: self.name.clone(),
+            id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -210,7 +219,7 @@ impl ChallengeEntry {
         config: &Config,
         zone_zoneables: bool,
         db: &Database,
-    ) -> Option<OpenChallenge> {
+    ) -> Option<InOpenChallenge> {
         // TODO: if zoneable and zone specified do something to let me know kthxbye
         let mut points = 0;
         points += self.points;
@@ -354,7 +363,7 @@ impl ChallengeEntry {
             });
         }
 
-        Some(OpenChallenge {
+        Some(InOpenChallenge {
             title: title.unwrap_or(config.default_challenge_title.clone()),
             description: description.unwrap_or(config.default_challenge_description.clone()),
             points: points as u64,
@@ -507,11 +516,14 @@ impl CollectionMapReduce for ZonesBySBahn {
 }
 
 #[derive(Debug, Clone, View, ViewSchema)]
-#[view(collection = Player, key = String, value = u64, name = "by-passphrase")]
+#[view(collection = PlayerEntry, key = String, value = u64, name = "by-passphrase")]
 struct PlayersByPassphrase;
 
 impl CollectionMapReduce for PlayersByPassphrase {
-    fn map<'doc>(&self, document: CollectionDocument<Player>) -> ViewMapResult<'doc, Self::View> {
+    fn map<'doc>(
+        &self,
+        document: CollectionDocument<PlayerEntry>,
+    ) -> ViewMapResult<'doc, Self::View> {
         document
             .header
             .emit_key_and_value(document.contents.passphrase, 1)
@@ -527,21 +539,24 @@ impl CollectionMapReduce for PlayersByPassphrase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Team {
-    name: String,
-    players: Vec<u64>,
-    discord_channel: Option<u64>,
-    role: TeamRole,
-    colour: Colour,
-    challenges: Vec<OpenChallenge>,
-    completed_challenges: Vec<CompletedChallenge>,
-    catcher_periods: Vec<CatcherPeriod>,
-    caught_periods: Vec<CaughtPeriod>,
-    trophy_periods: Vec<TrophyPeriod>,
+pub struct TeamEntry {
+    pub name: String,
+    pub players: Vec<u64>,
+    pub discord_channel: Option<u64>,
+    pub role: TeamRole,
+    pub colour: Colour,
+    pub points: u64,
+    pub bounty: u64,
+    pub locations: Vec<(f64, f64)>,
+    pub challenges: Vec<InOpenChallenge>,
+    pub completed_challenges: Vec<InCompletedChallenge>,
+    pub catcher_periods: Vec<CatcherPeriod>,
+    pub caught_periods: Vec<CaughtPeriod>,
+    pub trophy_periods: Vec<TrophyPeriod>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct TrophyPeriod {
+pub struct TrophyPeriod {
     trophies: u64,
     points_spent: u64,
     position_start_index: u64,
@@ -549,7 +564,7 @@ struct TrophyPeriod {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CaughtPeriod {
+pub struct CaughtPeriod {
     catcher_team: u64,
     bounty: u64,
     position_start_index: u64,
@@ -557,7 +572,7 @@ struct CaughtPeriod {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CatcherPeriod {
+pub struct CatcherPeriod {
     caught_team: u64,
     bounty: u64,
     position_start_index: u64,
@@ -565,26 +580,31 @@ struct CatcherPeriod {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CompletedChallenge {
-    name: String,
+pub struct InCompletedChallenge {
+    title: String,
     description: String,
     zone: Option<u64>,
     points: u64,
-    photo: crate::Jpeg,
+    photo: truinlag::Jpeg,
     time: chrono::NaiveTime,
     position_start_index: u64,
     position_end_index: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum TeamRole {
-    Runner,
-    Catcher,
+impl InCompletedChallenge {
+    pub fn to_sendable(&self) -> truinlag::CompletedChallenge {
+        truinlag::CompletedChallenge {
+            title: self.title.clone(),
+            description: self.description.clone(),
+            points: self.points,
+            time: self.time,
+        }
+    }
 }
 
-impl Team {
+impl TeamEntry {
     fn new(name: String, players: Vec<u64>, discord_channel: Option<u64>, colour: Colour) -> Self {
-        Team {
+        TeamEntry {
             name,
             players,
             discord_channel,
@@ -592,9 +612,40 @@ impl Team {
             completed_challenges: Vec::new(),
             challenges: Vec::new(),
             role: TeamRole::Runner,
+            points: 0,
+            bounty: 0,
+            locations: Vec::new(),
             catcher_periods: Vec::new(),
             caught_periods: Vec::new(),
             trophy_periods: Vec::new(),
+        }
+    }
+
+    pub fn to_sendable(&self, db: Database) -> truinlag::Team {
+        truinlag::Team {
+            is_catcher: self.role,
+            name: self.name.clone(),
+            id: 0,
+            bounty: self.bounty,
+            points: self.points,
+            players: self
+                .players
+                .iter()
+                .map(|p| {
+                    PlayerEntry::get(p, &db)
+                        .unwrap()
+                        .unwrap()
+                        .contents
+                        .to_sendable(*p)
+                })
+                .collect(),
+            challenges: self.challenges.iter().map(|c| c.to_sendable()).collect(),
+            completed_challenges: self
+                .completed_challenges
+                .iter()
+                .map(|c| c.to_sendable())
+                .collect(),
+            location: self.locations[0],
         }
     }
 }
@@ -644,7 +695,7 @@ enum ChallengeAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenChallenge {
+pub struct InOpenChallenge {
     title: String,
     description: String,
     points: u64,
@@ -652,7 +703,7 @@ struct OpenChallenge {
     zone: Option<u64>, // id for ZoneEntry collection in db
 }
 
-impl OpenChallenge {
+impl InOpenChallenge {
     fn completable(&self) -> bool {
         match &self.action {
             None => true,
@@ -665,10 +716,18 @@ impl OpenChallenge {
             },
         }
     }
+
+    pub fn to_sendable(&self) -> truinlag::Challenge {
+        truinlag::Challenge {
+            title: self.title.clone(),
+            points: self.points,
+            description: self.description.clone(),
+        }
+    }
 }
 
-impl PartialEq for OpenChallenge {
-    fn eq(&self, other: &OpenChallenge) -> bool {
+impl PartialEq for InOpenChallenge {
+    fn eq(&self, other: &InOpenChallenge) -> bool {
         self.title == other.title
     }
 }
@@ -686,7 +745,7 @@ struct PastGame {
     date: chrono::NaiveDate,
     mode: Mode,
     challenge_entries: Vec<ChallengeEntry>,
-    teams: Vec<Team>,
+    teams: Vec<TeamEntry>,
 }
 
 impl Session {
@@ -744,7 +803,7 @@ impl Session {
                         }
                     };
                     self.teams
-                        .push(Team::new(name, Vec::new(), discord_channel, colour));
+                        .push(TeamEntry::new(name, Vec::new(), discord_channel, colour));
                     for p in players {
                         self.assign(self.teams.len() - 1, p);
                     }
@@ -853,7 +912,7 @@ impl Engine {
                     name,
                     discord_id,
                     passphrase,
-                } => match Player::all(&self.db).query() {
+                } => match PlayerEntry::all(&self.db).query() {
                     Err(err) => {
                         println!("Couldn't retreive all players from db: {}", err);
                         EngineResponse {
@@ -874,7 +933,7 @@ impl Engine {
                                 broadcast_action: None,
                             }
                         } else {
-                            match (Player {
+                            match (PlayerEntry {
                                 name,
                                 discord_id,
                                 passphrase,

@@ -4,7 +4,6 @@ pub mod runtime;
 use error::Result;
 use runtime::manager;
 pub use truinlag::{Colour, Jpeg};
-pub mod commands;
 
 /*
 fn _get_config(filename: &str) -> Result<Config> {

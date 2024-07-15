@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 pub mod api;
 pub mod commands;
-pub mod engine;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Colour {
@@ -42,6 +41,63 @@ impl Jpeg {
     pub fn try_into_img(self) -> Result<DynamicImage, image::ImageError> {
         image::load_from_memory_with_format(&self.data, ImageFormat::Jpeg)
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+pub enum TeamRole {
+    Runner,
+    Catcher,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Team {
+    pub is_catcher: TeamRole,
+    pub name: String,
+    pub id: u64,
+    pub bounty: u64,
+    pub points: u64,
+    pub players: Vec<Player>,
+    pub challenges: Vec<Challenge>,
+    pub completed_challenges: Vec<CompletedChallenge>,
+    // pub thumb_name: String,
+    pub location: (f64, f64),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Player {
+    pub name: String,
+    pub id: u64,
+    // pub thumb_name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Challenge {
+    pub title: String,
+    pub description: String,
+    pub points: u64,
+    // pub attached_images: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CompletedChallenge {
+    pub title: String,
+    pub description: String,
+    pub points: u64,
+    pub time: chrono::NaiveTime,
+    // pub attached_images: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Mode {
+    Traditional,
+    Gfrorefurz,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Game {
+    pub name: String,
+    pub date: chrono::NaiveDate,
+    pub mode: Mode,
 }
 
 /*
