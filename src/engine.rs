@@ -623,7 +623,7 @@ impl TeamEntry {
 
     pub fn to_sendable(&self, db: &Database, index: usize) -> truinlag::Team {
         truinlag::Team {
-            is_catcher: self.role,
+            role: self.role,
             name: self.name.clone(),
             id: index,
             bounty: self.bounty,

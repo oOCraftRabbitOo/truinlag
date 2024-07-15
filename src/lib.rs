@@ -51,7 +51,7 @@ pub enum TeamRole {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Team {
-    pub is_catcher: TeamRole,
+    pub role: TeamRole,
     pub name: String,
     pub id: usize,
     pub bounty: u64,
