@@ -152,7 +152,7 @@ struct Session {
     discord_server_id: Option<u64>,
     discord_game_channel: Option<u64>,
     discord_admin_channel: Option<u64>,
-    game: Option<Game>,
+    game: Option<InGame>,
     past_games: Vec<PastGame>,
 }
 
@@ -621,18 +621,18 @@ impl TeamEntry {
         }
     }
 
-    pub fn to_sendable(&self, db: Database) -> truinlag::Team {
+    pub fn to_sendable(&self, db: &Database, index: usize) -> truinlag::Team {
         truinlag::Team {
             is_catcher: self.role,
             name: self.name.clone(),
-            id: 0,
+            id: index,
             bounty: self.bounty,
             points: self.points,
             players: self
                 .players
                 .iter()
                 .map(|p| {
-                    PlayerEntry::get(p, &db)
+                    PlayerEntry::get(p, db)
                         .unwrap()
                         .unwrap()
                         .contents
@@ -733,10 +733,20 @@ impl PartialEq for InOpenChallenge {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Game {
+pub struct InGame {
     name: String,
     date: chrono::NaiveDate,
     mode: Mode,
+}
+
+impl InGame {
+    pub fn to_sendable(&self) -> truinlag::Game {
+        truinlag::Game {
+            name: self.name.clone(),
+            date: self.date,
+            mode: self.mode,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -754,6 +764,7 @@ impl Session {
         cfg.apply_some(self.config.clone());
         cfg
     }
+
     fn assign(&mut self, team: usize, player: u64) {
         for t in self.teams.iter_mut() {
             t.players = t
@@ -767,9 +778,25 @@ impl Session {
             self.teams[team as usize].players.push(player);
         }
     }
+
     fn vroom(&mut self, command: EngineAction, db: &Database) -> EngineResponse {
         use EngineAction::*;
         match command {
+            GetState => EngineResponse {
+                broadcast_action: None,
+                response_action: ResponseAction::SendState {
+                    teams: self
+                        .teams
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| t.to_sendable(db, i))
+                        .collect(),
+                    game: match &self.game {
+                        None => None,
+                        Some(game) => Some(game.to_sendable()),
+                    },
+                },
+            },
             AddTeam {
                 name,
                 players,

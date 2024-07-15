@@ -56,6 +56,7 @@ pub enum EngineAction {
     Start,
     Stop,
     Ping(Option<String>),
+    GetState,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -65,7 +66,6 @@ pub enum ResponseAction {
     Player(u64),
     SendState {
         teams: Vec<Team>,
-        id: u64,
         game: Option<Game>,
     },
     Success,

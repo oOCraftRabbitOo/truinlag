@@ -53,7 +53,7 @@ pub enum TeamRole {
 pub struct Team {
     pub is_catcher: TeamRole,
     pub name: String,
-    pub id: u64,
+    pub id: usize,
     pub bounty: u64,
     pub points: u64,
     pub players: Vec<Player>,
@@ -87,7 +87,7 @@ pub struct CompletedChallenge {
     // pub attached_images: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub enum Mode {
     Traditional,
     Gfrorefurz,
