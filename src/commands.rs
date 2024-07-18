@@ -73,8 +73,14 @@ pub enum ResponseAction {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum BroadcastAction {
-    Catch { catcher: usize, caught: usize },
-    Complete { completer: usize, completed: usize },
+    Catch {
+        catcher: Team,
+        caught: Team,
+    },
+    Complete {
+        completer: Team,
+        completed: Challenge,
+    },
     Start,
     End,
     Ping(Option<String>),

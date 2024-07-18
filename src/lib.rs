@@ -75,6 +75,7 @@ pub struct Challenge {
     pub title: String,
     pub description: String,
     pub points: u64,
+    pub id: usize,
     // pub attached_images: Vec<String>,
 }
 
