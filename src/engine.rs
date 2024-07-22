@@ -169,6 +169,7 @@ impl PlayerEntry {
     pub fn to_sendable(&self, id: u64) -> truinlag::Player {
         truinlag::Player {
             name: self.name.clone(),
+            session: self.session,
             id,
         }
     }
@@ -923,16 +924,24 @@ impl Engine {
                             response_action: ResponseAction::Error(commands::Error::NotFound),
                             broadcast_action: None,
                         },
-                        1 => EngineResponse {
-                            response_action: ResponseAction::Player(
-                                doc.get(0).unwrap().document.header.id,
-                            ),
-                            broadcast_action: None,
-                        },
-                        _ => EngineResponse {
-                            response_action: ResponseAction::Error(commands::Error::InternalError),
-                            broadcast_action: None,
-                        },
+                        1 => {
+                            let document = doc.get(0).unwrap().document;
+                            EngineResponse {
+                                response_action: ResponseAction::Player(
+                                    document.contents.to_sendable(document.header.id),
+                                ),
+                                broadcast_action: None,
+                            }
+                        }
+                        _ => {
+                            eprintln!("Multiple players seem to have passphrase {}", passphrase);
+                            EngineResponse {
+                                response_action: ResponseAction::Error(
+                                    commands::Error::InternalError,
+                                ),
+                                broadcast_action: None,
+                            }
+                        }
                     }
                 }
                 AddPlayer {
@@ -978,7 +987,9 @@ impl Engine {
                                     }
                                 }
                                 Ok(doc) => EngineResponse {
-                                    response_action: ResponseAction::Player(doc.header.id),
+                                    response_action: ResponseAction::Player(
+                                        doc.contents.to_sendable(doc.header.id),
+                                    ),
                                     broadcast_action: None,
                                 },
                             }

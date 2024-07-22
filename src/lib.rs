@@ -67,6 +67,7 @@ pub struct Team {
 pub struct Player {
     pub name: String,
     pub id: u64,
+    pub session: Option<u64>,
     // pub thumb_name: String,
 }
 
@@ -75,7 +76,6 @@ pub struct Challenge {
     pub title: String,
     pub description: String,
     pub points: u64,
-    pub id: usize,
     // pub attached_images: Vec<String>,
 }
 

@@ -45,12 +45,16 @@ pub enum EngineAction {
         colour: Option<Colour>,
     },
     Catch {
-        catcher: String,
-        caught: String,
+        catcher: usize,
+        caught: usize,
     },
     Complete {
-        completer: String,
-        completed: u32,
+        completer: usize,
+        completed: usize,
+    },
+    Location {
+        player: u64,
+        location: (f64, f64),
     },
     GetPlayerByPassphrase(String),
     Start,
@@ -62,8 +66,8 @@ pub enum EngineAction {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ResponseAction {
     Error(Error),
-    Team(u64),
-    Player(u64),
+    Team(Team),
+    Player(Player),
     SendState {
         teams: Vec<Team>,
         game: Option<Game>,
