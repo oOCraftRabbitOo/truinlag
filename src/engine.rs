@@ -982,6 +982,7 @@ impl Engine {
                     name,
                     discord_id,
                     passphrase,
+                    session,
                 } => match PlayerEntry::all(&self.db).query() {
                     Err(err) => {
                         println!("Couldn't retreive all players from db: {}", err);
@@ -1007,12 +1008,12 @@ impl Engine {
                                 name,
                                 discord_id,
                                 passphrase,
-                                session: None,
+                                session,
                             })
                             .push_into(&self.db)
                             {
                                 Err(err) => {
-                                    println!("Couldn't add player to db: {}", err);
+                                    println!("Engine: Couldn't add player to db: {}", err);
                                     EngineResponse {
                                         response_action: ResponseAction::Error(
                                             commands::Error::InternalError,
@@ -1027,6 +1028,39 @@ impl Engine {
                                     broadcast_action: None,
                                 },
                             }
+                        }
+                    }
+                },
+                SetPlayerSession { player, session } => match PlayerEntry::get(&player, &self.db) {
+                    Ok(db_response) => match db_response {
+                        Some(mut player_document) => {
+                            player_document.contents.session = session;
+                            match player_document.update(&self.db) {
+                                Ok(_) => EngineResponse {
+                                    response_action: ResponseAction::Success,
+                                    broadcast_action: None,
+                                },
+                                Err(err) => {
+                                    eprintln!("Engine: Couldn't update player in db while changing session: {}", err);
+                                    EngineResponse {
+                                        response_action: ResponseAction::Error(
+                                            commands::Error::InternalError,
+                                        ),
+                                        broadcast_action: None,
+                                    }
+                                }
+                            }
+                        }
+                        None => ResponseAction::Error(commands::Error::NotFound).into(),
+                    },
+                    Err(err) => {
+                        eprintln!(
+                            "Engine: Couldn't get player with id {} from db: {}",
+                            player, err
+                        );
+                        EngineResponse {
+                            response_action: ResponseAction::Error(commands::Error::InternalError),
+                            broadcast_action: None,
                         }
                     }
                 },

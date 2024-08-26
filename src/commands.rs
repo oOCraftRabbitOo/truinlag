@@ -19,6 +19,15 @@ pub struct EngineResponse {
     pub broadcast_action: Option<BroadcastAction>,
 }
 
+impl From<ResponseAction> for EngineResponse {
+    fn from(value: ResponseAction) -> Self {
+        Self {
+            response_action: value,
+            broadcast_action: None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ClientCommand {
     Broadcast(BroadcastAction),
@@ -37,12 +46,17 @@ pub enum EngineAction {
         name: String,
         discord_id: Option<u64>,
         passphrase: String,
+        session: Option<u64>,
     },
     AddTeam {
         name: String,
         players: Vec<u64>,
         discord_channel: Option<u64>,
         colour: Option<Colour>,
+    },
+    SetPlayerSession {
+        player: u64,
+        session: Option<u64>,
     },
     Catch {
         catcher: usize,
