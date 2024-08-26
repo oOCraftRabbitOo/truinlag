@@ -157,7 +157,7 @@ struct Session {
 }
 
 #[derive(Debug, Collection, Serialize, Deserialize)]
-#[collection(name = "player")]
+#[collection(name = "player", views = [PlayersByPassphrase])]
 struct PlayerEntry {
     name: String,
     passphrase: String,
