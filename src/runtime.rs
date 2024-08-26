@@ -4,6 +4,7 @@ use crate::error::Result;
 use async_broadcast as broadcast;
 use std::future::Future;
 use std::marker::Unpin;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::net;
 use tokio::select;
@@ -189,6 +190,7 @@ async fn engine(
 ) -> Result<()> {
     let broadcast_send_error =
         "Engine: The broadcast channel should never be closed because of `_broadcast_rx_staller`";
+    let engine = engine::Engine::init(Path::new("truintabase"));
     loop {
         match mpsc_handle
             .recv()
@@ -199,7 +201,7 @@ async fn engine(
                 command: package,
                 channel,
             } => {
-                let response = engine::vroom(package.command);
+                let response = engine.vroom(package.command);
                 if let Some(action) = response.broadcast_action {
                     let message = IOSignal::Command(ClientCommand::Broadcast(action));
                     if broadcast_handle.is_full() {

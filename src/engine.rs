@@ -22,7 +22,7 @@ use truinlag::*;
 pub fn vroom(command: EngineCommand) -> EngineResponse {
     EngineResponse {
         response_action: ResponseAction::Success,
-        broadcast_action: Some(BroadcastAction::Ping(None)),
+        broadcast_action: Some(BroadcastAction::Pinged(None)),
     }
 }
 
@@ -783,6 +783,36 @@ impl Session {
     fn vroom(&mut self, command: EngineAction, db: &Database) -> EngineResponse {
         use EngineAction::*;
         match command {
+            Location { player, location } => {
+                match self
+                    .teams
+                    .iter()
+                    .position(|t| t.players.iter().all(|&p| p == player))
+                {
+                    None => EngineResponse {
+                        response_action: ResponseAction::Error(commands::Error::NotFound),
+                        broadcast_action: None,
+                    },
+                    Some(team) => EngineResponse {
+                        response_action: ResponseAction::Success,
+                        broadcast_action: Some(BroadcastAction::Location { team, location }),
+                    },
+                }
+            }
+            Catch {
+                catcher: _,
+                caught: _,
+            } => EngineResponse {
+                broadcast_action: None,
+                response_action: ResponseAction::Error(commands::Error::NotImplemented), // TODO
+            },
+            Complete {
+                completer: _,
+                completed: _,
+            } => EngineResponse {
+                broadcast_action: None,
+                response_action: ResponseAction::Error(commands::Error::NotImplemented), // TODO
+            },
             GetState => EngineResponse {
                 broadcast_action: None,
                 response_action: ResponseAction::SendState {
@@ -941,7 +971,7 @@ impl Engine {
                             eprintln!("Multiple players seem to have passphrase {}", passphrase);
                             EngineResponse {
                                 response_action: ResponseAction::Error(
-                                    commands::Error::InternalError,
+                                    commands::Error::AmbiguousData,
                                 ),
                                 broadcast_action: None,
                             }

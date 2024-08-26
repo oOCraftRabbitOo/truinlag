@@ -77,26 +77,33 @@ pub enum ResponseAction {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum BroadcastAction {
-    Catch {
+    Caught {
         catcher: Team,
         caught: Team,
     },
-    Complete {
+    Completed {
         completer: Team,
         completed: Challenge,
     },
-    Start,
-    End,
-    Ping(Option<String>),
+    Started,
+    Ended,
+    Pinged(Option<String>),
+    Location {
+        team: usize,
+        location: (f64, f64),
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Error {
-    NoSessionSupplied,
-    SessionSupplied,
-    NotFound,
-    TeamExists(String),
-    AlreadyExists,
-    GameInProgress,
-    InternalError,
+    NoSessionSupplied, // Session specific commands like catch or add_team need a session
+    SessionSupplied,   // Global commands like AddPlayer cannot be run with a session supplied
+    NotFound,          // Element you were looking for wasn't found
+    TeamExists(String), // You cannot create a team if one with a similar name already exists
+    AlreadyExists,     // Things that already exist cannot be created
+    GameInProgress,    // Commands like AddTeam cannot be run if a game is in progress
+    GameNotRunning,    // Commands like catch can only be run if a game is in progress
+    AmbiguousData,     // If multiple matching objects exist, e.g. players with passphrase lol
+    InternalError,     // Some sort of internal database error
+    NotImplemented,    // Feature is not yet implemented
 }
