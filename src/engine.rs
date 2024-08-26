@@ -913,6 +913,7 @@ impl Engine {
             },
             None => match command.action {
                 GetPlayerByPassphrase(passphrase) => {
+                    println!("getting player by passphrase {}", passphrase);
                     let doc = self
                         .db
                         .view::<PlayersByPassphrase>()
@@ -920,10 +921,13 @@ impl Engine {
                         .query_with_collection_docs()
                         .unwrap();
                     match doc.len() {
-                        0 => EngineResponse {
-                            response_action: ResponseAction::Error(commands::Error::NotFound),
-                            broadcast_action: None,
-                        },
+                        0 => {
+                            println!("no player found, returning not found error");
+                            EngineResponse {
+                                response_action: ResponseAction::Error(commands::Error::NotFound),
+                                broadcast_action: None,
+                            }
+                        }
                         1 => {
                             let document = doc.get(0).unwrap().document;
                             EngineResponse {
