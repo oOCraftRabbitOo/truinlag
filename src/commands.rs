@@ -42,6 +42,10 @@ pub struct ResponsePackage {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum EngineAction {
+    AddSession {
+        name: String,
+        mode: Mode,
+    },
     AddPlayer {
         name: String,
         discord_id: Option<u64>,
@@ -50,13 +54,27 @@ pub enum EngineAction {
     },
     AddTeam {
         name: String,
-        players: Vec<u64>,
         discord_channel: Option<u64>,
         colour: Option<Colour>,
+    },
+    AssignPlayerToTeam {
+        player: u64,
+        team: Option<usize>,
     },
     SetPlayerSession {
         player: u64,
         session: Option<u64>,
+    },
+    SetPlayerName {
+        player: u64,
+        name: String,
+    },
+    SetPlayerPassphrase {
+        player: u64,
+        passphrase: String,
+    },
+    RemovePlayer {
+        player: u64,
     },
     Catch {
         catcher: usize,
@@ -66,7 +84,7 @@ pub enum EngineAction {
         completer: usize,
         completed: usize,
     },
-    Location {
+    SendLocation {
         player: u64,
         location: (f64, f64),
     },
@@ -106,6 +124,18 @@ pub enum BroadcastAction {
         team: usize,
         location: (f64, f64),
     },
+    PlayerChangedSession {
+        player: Player,
+        from_session: Option<u64>,
+        to_session: Option<u64>,
+    },
+    PlayerChangedTeam {
+        session: u64,
+        player: u64,
+        from_team: Option<usize>,
+        to_team: Option<usize>,
+    },
+    PlayerDeleted(Player),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

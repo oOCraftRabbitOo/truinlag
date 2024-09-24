@@ -1,30 +1,25 @@
 use bonsaidb::core::connection::{Connection, StorageConnection};
 use bonsaidb::core::document::{CollectionDocument, Emit};
+use bonsaidb::core::key::KeyEncoding;
 use bonsaidb::core::schema::{
-    Collection, CollectionMapReduce, ReduceResult, Schema, SerializedCollection, SerializedView,
-    View, ViewMapResult, ViewMappedValue, ViewSchema,
+    Collection, CollectionMapReduce, DefaultSerialization, ReduceResult, Schema,
+    SerializedCollection, SerializedView, View, ViewMapResult, ViewMappedValue, ViewSchema,
 };
 use bonsaidb::local::config::Builder;
 use bonsaidb::local::{config, Database, Storage};
-use chrono;
-use geo::Point;
+use chrono::{self, NaiveTime};
 use partially::Partial;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
+use std::usize;
 use strsim::normalized_damerau_levenshtein as strcmp;
 use truinlag::commands::{
     BroadcastAction, EngineAction, EngineCommand, EngineResponse, ResponseAction,
 };
 use truinlag::*;
-
-pub fn vroom(command: EngineCommand) -> EngineResponse {
-    EngineResponse {
-        response_action: ResponseAction::Success,
-        broadcast_action: Some(BroadcastAction::Pinged(None)),
-    }
-}
 
 #[derive(Partial, Debug, Clone, Serialize, Deserialize)]
 #[partially(derive(Debug, Clone, Serialize, Deserialize, Default))]
@@ -35,6 +30,7 @@ struct Config {
     points_per_grade: u64,
     points_per_walking_minute: u64,
     points_per_stationary_minute: u64,
+    points_per_travel_minute: u64,
 
     // Zonenkaff
     points_per_connected_zone_less_than_6: u64,
@@ -54,8 +50,12 @@ struct Config {
     bounty_percentage: f64,
 
     // Times
-    unspecific_time: chrono::NaiveTime,
+    start_time: chrono::NaiveTime,
+    end_time: chrono::NaiveTime,
     specific_minutes: u64,
+    perimeter_minutes: u64,
+    zkaff_minutes: u64,
+    end_game_minutes: u64,
 
     // Fallback Defaults
     default_challenge_title: String,
@@ -73,6 +73,7 @@ impl Default for Config {
             points_per_grade: 20,
             points_per_walking_minute: 10,
             points_per_stationary_minute: 10,
+            points_per_travel_minute: 12,
             points_per_bad_connectivity_index: 25,
             points_per_connected_zone_less_than_6: 15,
             points_for_no_train: 30,
@@ -82,8 +83,12 @@ impl Default for Config {
             bounty_base_points: 100,
             bounty_start_points: 250,
             bounty_percentage: 0.25,
-            unspecific_time: chrono::NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+            start_time: chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            end_time: chrono::NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
             specific_minutes: 15,
+            perimeter_minutes: 90,
+            zkaff_minutes: 90,
+            end_game_minutes: 30,
             default_challenge_title: "[Kreative Titel]".into(),
             default_challenge_description:
                 "Ihr hend Päch, die Challenge isch unlösbar. Ihr müend e anderi uswähle.".into(),
@@ -142,21 +147,7 @@ impl Default for Config {
 #[schema(name="engine", collections=[Session, PlayerEntry, ChallengeEntry, ZoneEntry])]
 struct EngineSchema {}
 
-#[derive(Debug, Clone, Collection, Serialize, Deserialize)]
-#[collection(name = "session")]
-struct Session {
-    name: String,
-    teams: Vec<TeamEntry>,
-    mode: Mode,
-    config: PartialConfig,
-    discord_server_id: Option<u64>,
-    discord_game_channel: Option<u64>,
-    discord_admin_channel: Option<u64>,
-    game: Option<InGame>,
-    past_games: Vec<PastGame>,
-}
-
-#[derive(Debug, Collection, Serialize, Deserialize)]
+#[derive(Debug, Collection, Serialize, Deserialize, Clone)]
 #[collection(name = "player", views = [PlayersByPassphrase])]
 struct PlayerEntry {
     name: String,
@@ -204,6 +195,8 @@ struct ChallengeEntry {
     repetitions: std::ops::Range<u64>,
     points_per_rep: i64,
     fixed: bool,
+    no_disembark: bool,
+    perimeter_override: Option<bool>,
     zones: Vec<u64>,
     walking_time: i64,
     stationary_time: i64,
@@ -468,6 +461,33 @@ struct ZoneEntry {
     train_through: bool,
     mongus: bool,
     s_bahn_zone: bool,
+    minutes_to: HashMap<u64, u64>,
+}
+
+impl ZoneEntry {
+    fn zonic_kaffness(&self, config: &Config) -> u64 {
+        let zonic_kaffness = ((6_f64 - self.num_conn_zones as f64)
+            * config.points_per_connected_zone_less_than_6 as f64
+            + (6_f64 - (self.num_connections as f64).sqrt())
+                * config.points_per_bad_connectivity_index as f64
+            + if self.train_through {
+                0_f64
+            } else {
+                config.points_for_no_train as f64
+            }
+            + if self.mongus {
+                config.points_for_mongus as f64
+            } else {
+                0_f64
+            })
+        .floor();
+        if zonic_kaffness > 0_f64 {
+            zonic_kaffness as u64
+        } else {
+            eprintln!("Engine: zonic kaffness for zone {} <= 0", self.zone);
+            0
+        }
+    }
 }
 
 #[derive(Debug, Clone, View, ViewSchema)]
@@ -548,9 +568,9 @@ pub struct TeamEntry {
     pub colour: Colour,
     pub points: u64,
     pub bounty: u64,
-    pub locations: Vec<(f64, f64)>,
+    pub locations: Vec<(f64, f64, NaiveTime)>,
     pub challenges: Vec<InOpenChallenge>,
-    pub completed_challenges: Vec<InCompletedChallenge>,
+    pub completed_challenges: Vec<ChompletedChallengePeriod>,
     pub catcher_periods: Vec<CatcherPeriod>,
     pub caught_periods: Vec<CaughtPeriod>,
     pub trophy_periods: Vec<TrophyPeriod>,
@@ -581,7 +601,7 @@ pub struct CatcherPeriod {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InCompletedChallenge {
+pub struct ChompletedChallengePeriod {
     title: String,
     description: String,
     zone: Option<u64>,
@@ -592,7 +612,7 @@ pub struct InCompletedChallenge {
     position_end_index: u64,
 }
 
-impl InCompletedChallenge {
+impl ChompletedChallengePeriod {
     pub fn to_sendable(&self) -> truinlag::CompletedChallenge {
         truinlag::CompletedChallenge {
             title: self.title.clone(),
@@ -646,33 +666,7 @@ impl TeamEntry {
                 .iter()
                 .map(|c| c.to_sendable())
                 .collect(),
-            location: self.locations[0],
-        }
-    }
-}
-
-impl ZoneEntry {
-    fn zonic_kaffness(&self, config: &Config) -> u64 {
-        let zonic_kaffness = ((6_f64 - self.num_conn_zones as f64)
-            * config.points_per_connected_zone_less_than_6 as f64
-            + (6_f64 - (self.num_connections as f64).sqrt())
-                * config.points_per_bad_connectivity_index as f64
-            + if self.train_through {
-                0_f64
-            } else {
-                config.points_for_no_train as f64
-            }
-            + if self.mongus {
-                config.points_for_mongus as f64
-            } else {
-                0_f64
-            })
-        .floor();
-        if zonic_kaffness > 0_f64 {
-            zonic_kaffness as u64
-        } else {
-            eprintln!("Engine: zonic kaffness for zone {} <= 0", self.zone);
-            0
+            location: (self.locations[0].0, self.locations[0].1),
         }
     }
 }
@@ -759,6 +753,109 @@ struct PastGame {
     teams: Vec<TeamEntry>,
 }
 
+fn get_from_db<T, F, I, Cn>(connection: &Cn, id: I, on_success: F) -> EngineResponse
+where
+    T: SerializedCollection,
+    F: Fn(CollectionDocument<T>) -> EngineResponse,
+    I: KeyEncoding<T::PrimaryKey> + std::fmt::Display,
+    Cn: Connection,
+{
+    match T::get(&id, connection) {
+        Ok(db_response) => match db_response {
+            Some(collection_doc) => on_success(collection_doc),
+            None => ResponseAction::Error(commands::Error::NotFound).into(),
+        },
+        Err(err) => {
+            eprintln!(
+                "Engine: Couldn't get {} with id {} from db: {}",
+                std::any::type_name::<T>(),
+                id,
+                err
+            );
+            EngineResponse {
+                response_action: ResponseAction::Error(commands::Error::InternalError),
+                broadcast_action: None,
+            }
+        }
+    }
+}
+
+fn update_in_db<T, Cn>(connection: &Cn, doc: CollectionDocument<T>) -> EngineResponse
+where
+    T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
+    Cn: Connection,
+{
+    update_in_db_and(connection, doc, || ResponseAction::Success.into())
+}
+
+fn update_in_db_and<T, Cn, F>(
+    connection: &Cn,
+    mut doc: CollectionDocument<T>,
+    on_success: F,
+) -> EngineResponse
+where
+    T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
+    Cn: Connection,
+    F: Fn() -> EngineResponse,
+{
+    match doc.update(connection) {
+        Ok(_) => on_success(),
+        Err(err) => {
+            eprintln!(
+                "Couldn't update {} in db: {}",
+                std::any::type_name::<T>(),
+                err
+            );
+            ResponseAction::Error(commands::Error::InternalError).into()
+        }
+    }
+}
+
+fn delete_from_db<T, Cn>(connection: &Cn, doc: CollectionDocument<T>) -> EngineResponse
+where
+    T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
+    Cn: Connection,
+{
+    delete_from_db_and(connection, doc, || ResponseAction::Success.into())
+}
+
+fn delete_from_db_and<T, Cn, F>(
+    connection: &Cn,
+    doc: CollectionDocument<T>,
+    on_success: F,
+) -> EngineResponse
+where
+    T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
+    Cn: Connection,
+    F: Fn() -> EngineResponse,
+{
+    match doc.delete(connection) {
+        Ok(_) => on_success(),
+        Err(err) => {
+            eprintln!(
+                "Couldn't delete {} from db: {}",
+                std::any::type_name::<T>(),
+                err
+            );
+            ResponseAction::Error(commands::Error::InternalError).into()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Collection, Serialize, Deserialize)]
+#[collection(name = "session")]
+struct Session {
+    name: String,
+    teams: Vec<TeamEntry>,
+    mode: Mode,
+    config: PartialConfig,
+    discord_server_id: Option<u64>,
+    discord_game_channel: Option<u64>,
+    discord_admin_channel: Option<u64>,
+    game: Option<InGame>,
+    past_games: Vec<PastGame>,
+}
+
 impl Session {
     fn config(&self) -> Config {
         let mut cfg = Config::default();
@@ -766,24 +863,27 @@ impl Session {
         cfg
     }
 
-    fn assign(&mut self, team: usize, player: u64) {
-        for t in self.teams.iter_mut() {
-            t.players = t
-                .players
-                .iter()
-                .filter(|&&p| p != player)
-                .map(|&e| e)
-                .collect();
-        }
-        if (team as usize) < self.teams.len() {
-            self.teams[team as usize].players.push(player);
+    fn new(name: String, mode: Mode) -> Self {
+        Session {
+            name,
+            mode,
+            teams: Vec::new(),
+            config: PartialConfig::default(),
+            discord_server_id: None,
+            discord_game_channel: None,
+            discord_admin_channel: None,
+            game: None,
+            past_games: Vec::new(),
         }
     }
 
-    fn vroom(&mut self, command: EngineAction, db: &Database) -> EngineResponse {
+    fn vroom(&mut self, command: EngineAction, db: &Database, session_id: u64) -> EngineResponse {
+        use commands::Error::*;
+        use BroadcastAction::*;
         use EngineAction::*;
+        use ResponseAction::*;
         match command {
-            Location { player, location } => {
+            SendLocation { player, location } => {
                 match self
                     .teams
                     .iter()
@@ -799,19 +899,60 @@ impl Session {
                     },
                 }
             }
+            AssignPlayerToTeam { player, team } => {
+                let mut old_team = None;
+                self.teams.iter_mut().enumerate().for_each(|(index, t)| {
+                    match t.players.iter().position(|p| p == &player) {
+                        Some(i) => {
+                            t.players.remove(i);
+                            old_team = Some(index)
+                        }
+                        None => (),
+                    }
+                });
+                match team {
+                    Some(t) => match self.teams.get_mut(t) {
+                        Some(t) => {
+                            t.players.push(player);
+                            EngineResponse {
+                                response_action: Success,
+                                broadcast_action: Some(PlayerChangedTeam {
+                                    session: session_id,
+                                    player,
+                                    from_team: old_team,
+                                    to_team: team,
+                                }),
+                            }
+                        }
+                        None => Error(NotFound).into(),
+                    },
+                    None => EngineResponse {
+                        response_action: Success,
+                        broadcast_action: Some(PlayerChangedTeam {
+                            session: session_id,
+                            player,
+                            from_team: old_team,
+                            to_team: team,
+                        }),
+                    },
+                }
+            }
             Catch {
                 catcher: _,
                 caught: _,
             } => EngineResponse {
                 broadcast_action: None,
-                response_action: ResponseAction::Error(commands::Error::NotImplemented), // TODO
+                response_action: ResponseAction::Error(commands::Error::NotImplemented), // TODO:
             },
             Complete {
-                completer: _,
-                completed: _,
-            } => EngineResponse {
-                broadcast_action: None,
-                response_action: ResponseAction::Error(commands::Error::NotImplemented), // TODO
+                completer,
+                completed,
+            } => match self.teams.get_mut(completer) {
+                Some(completer) => match completer.challenges.get_mut(completed) {
+                    Some(completed) => todo!(),
+                    None => todo!(),
+                },
+                None => todo!(),
             },
             GetState => EngineResponse {
                 broadcast_action: None,
@@ -830,7 +971,6 @@ impl Session {
             },
             AddTeam {
                 name,
-                players,
                 discord_channel,
                 colour,
             } => {
@@ -862,29 +1002,41 @@ impl Session {
                     };
                     self.teams
                         .push(TeamEntry::new(name, Vec::new(), discord_channel, colour));
-                    for p in players {
-                        self.assign(self.teams.len() - 1, p);
-                    }
                     EngineResponse {
                         response_action: ResponseAction::Success,
                         broadcast_action: None,
                     }
                 }
             }
-
             Start => match self.game {
                 Some(_) => EngineResponse {
                     response_action: ResponseAction::Error(commands::Error::GameInProgress),
                     broadcast_action: None,
                 },
                 None => {
-                    todo!();
+                    todo!(); // TODO:
                 }
             },
-            _ => EngineResponse {
-                response_action: ResponseAction::Error(commands::Error::SessionSupplied),
-                broadcast_action: None,
-            },
+            Stop => Error(NotImplemented).into(), // TODO:
+            AddSession { name: _, mode: _ } => Error(SessionSupplied).into(),
+            Ping(_) => Error(SessionSupplied).into(),
+            GetPlayerByPassphrase(_) => Error(SessionSupplied).into(),
+            RemovePlayer { player: _ } => Error(SessionSupplied).into(),
+            SetPlayerSession {
+                player: _,
+                session: _,
+            } => Error(SessionSupplied).into(),
+            SetPlayerName { player: _, name: _ } => Error(SessionSupplied).into(),
+            SetPlayerPassphrase {
+                player: _,
+                passphrase: _,
+            } => Error(SessionSupplied).into(),
+            AddPlayer {
+                name: _,
+                discord_id: _,
+                passphrase: _,
+                session: _,
+            } => Error(SessionSupplied).into(),
         }
     }
 }
@@ -918,8 +1070,50 @@ impl Engine {
         Engine { db }
     }
 
+    fn get_from_db<T, F, I>(&self, id: I, on_success: F) -> EngineResponse
+    where
+        T: SerializedCollection,
+        F: Fn(CollectionDocument<T>) -> EngineResponse,
+        I: KeyEncoding<T::PrimaryKey> + std::fmt::Display,
+    {
+        get_from_db::<T, _, _, _>(&self.db, id, on_success)
+    }
+
+    fn update_in_db<T>(&self, doc: CollectionDocument<T>) -> EngineResponse
+    where
+        T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
+    {
+        update_in_db(&self.db, doc)
+    }
+
+    fn update_in_db_and<T, F>(&self, doc: CollectionDocument<T>, on_success: F) -> EngineResponse
+    where
+        T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
+        F: Fn() -> EngineResponse,
+    {
+        update_in_db_and(&self.db, doc, on_success)
+    }
+
+    fn delete_from_db<T>(&self, doc: CollectionDocument<T>) -> EngineResponse
+    where
+        T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
+    {
+        delete_from_db(&self.db, doc)
+    }
+
+    fn delete_from_db_and<T, F>(&self, doc: CollectionDocument<T>, on_success: F) -> EngineResponse
+    where
+        T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
+        F: Fn() -> EngineResponse,
+    {
+        delete_from_db_and(&self.db, doc, on_success)
+    }
+
     pub fn vroom(&self, command: EngineCommand) -> EngineResponse {
+        use commands::Error::*;
+        use BroadcastAction::*;
         use EngineAction::*;
+        use ResponseAction::*;
         match command.session {
             Some(id) => match Session::get(&id, &self.db) {
                 Err(err) => {
@@ -935,7 +1129,7 @@ impl Engine {
                         broadcast_action: None,
                     },
                     Some(mut doc) => {
-                        let response = doc.contents.vroom(command.action, &self.db);
+                        let response = doc.contents.vroom(command.action, &self.db, doc.header.id);
                         doc.update(&self.db).unwrap();
                         response
                     }
@@ -978,6 +1172,29 @@ impl Engine {
                         }
                     }
                 }
+                AddSession { name, mode } => match Session::all(&self.db).query() {
+                    Err(err) => {
+                        println!("Engine: Couldn't retreive all sessions from db: {}", err);
+                        ResponseAction::Error(commands::Error::InternalError).into()
+                    }
+                    Ok(sessions) => {
+                        if let Some(_) = sessions
+                            .iter()
+                            .map(|s| &s.contents.name)
+                            .find(|s| s == &&name)
+                        {
+                            ResponseAction::Error(commands::Error::AlreadyExists).into()
+                        } else {
+                            match Session::new(name, mode).push_into(&self.db) {
+                                Err(err) => {
+                                    println!("Couldn't push session into db: {}", err);
+                                    ResponseAction::Error(commands::Error::InternalError).into()
+                                }
+                                Ok(_) => ResponseAction::Success.into(),
+                            }
+                        }
+                    }
+                },
                 AddPlayer {
                     name,
                     discord_id,
@@ -985,7 +1202,7 @@ impl Engine {
                     session,
                 } => match PlayerEntry::all(&self.db).query() {
                     Err(err) => {
-                        println!("Couldn't retreive all players from db: {}", err);
+                        println!("Engine: Couldn't retreive all players from db: {}", err);
                         EngineResponse {
                             response_action: ResponseAction::Error(commands::Error::InternalError),
                             broadcast_action: None,
@@ -1031,43 +1248,84 @@ impl Engine {
                         }
                     }
                 },
-                SetPlayerSession { player, session } => match PlayerEntry::get(&player, &self.db) {
-                    Ok(db_response) => match db_response {
-                        Some(mut player_document) => {
-                            player_document.contents.session = session;
-                            match player_document.update(&self.db) {
-                                Ok(_) => EngineResponse {
-                                    response_action: ResponseAction::Success,
-                                    broadcast_action: None,
-                                },
-                                Err(err) => {
-                                    eprintln!("Engine: Couldn't update player in db while changing session: {}", err);
-                                    EngineResponse {
-                                        response_action: ResponseAction::Error(
-                                            commands::Error::InternalError,
-                                        ),
-                                        broadcast_action: None,
-                                    }
-                                }
-                            }
+                SetPlayerSession { player, session } => {
+                    self.get_from_db::<PlayerEntry, _, _>(player, |mut doc| {
+                        let old_session = doc.contents.session;
+                        doc.contents.session = session;
+                        if let Some(old_session) = old_session {
+                            self.get_from_db::<Session, _, _>(old_session, |mut session_doc| {
+                                session_doc
+                                    .contents
+                                    .teams
+                                    .iter_mut()
+                                    .for_each(|t| t.players.retain(|p| p != &player));
+                                self.update_in_db(session_doc)
+                            });
                         }
-                        None => ResponseAction::Error(commands::Error::NotFound).into(),
-                    },
-                    Err(err) => {
-                        eprintln!(
-                            "Engine: Couldn't get player with id {} from db: {}",
-                            player, err
-                        );
-                        EngineResponse {
-                            response_action: ResponseAction::Error(commands::Error::InternalError),
-                            broadcast_action: None,
-                        }
+                        self.update_in_db_and(doc.clone(), || EngineResponse {
+                            response_action: Success,
+                            broadcast_action: Some(PlayerChangedSession {
+                                player: doc.contents.to_sendable(doc.header.id),
+                                from_session: old_session,
+                                to_session: session,
+                            }),
+                        })
+                    })
+                }
+                SetPlayerName { player, name } => {
+                    self.get_from_db::<PlayerEntry, _, _>(player, |mut doc| {
+                        doc.contents.name = name.clone();
+                        self.update_in_db(doc)
+                    })
+                }
+                SetPlayerPassphrase { player, passphrase } => self
+                    .get_from_db::<PlayerEntry, _, _>(player, |mut doc| {
+                        doc.contents.passphrase = passphrase.clone();
+                        self.update_in_db(doc)
+                    }),
+                RemovePlayer { player } => self.get_from_db::<PlayerEntry, _, _>(player, |doc| {
+                    if let Some(session) = doc.contents.session {
+                        self.get_from_db::<Session, _, _>(session, |mut session_doc| {
+                            session_doc
+                                .contents
+                                .teams
+                                .iter_mut()
+                                .for_each(|t| t.players.retain(|p| p != &player));
+                            self.update_in_db(session_doc)
+                        });
                     }
+                    self.delete_from_db_and(doc.clone(), || EngineResponse {
+                        response_action: Success,
+                        broadcast_action: Some(PlayerDeleted(
+                            doc.contents.to_sendable(doc.header.id),
+                        )),
+                    })
+                }),
+                Ping(payload) => EngineResponse {
+                    response_action: Success,
+                    broadcast_action: Some(BroadcastAction::Pinged(payload)),
                 },
-                _ => EngineResponse {
-                    response_action: ResponseAction::Error(commands::Error::NoSessionSupplied),
-                    broadcast_action: None,
-                },
+                GetState => Error(NoSessionSupplied).into(),
+                Start => Error(NoSessionSupplied).into(),
+                Stop => Error(NoSessionSupplied).into(),
+                Catch {
+                    catcher: _,
+                    caught: _,
+                } => Error(NoSessionSupplied).into(),
+                Complete {
+                    completer: _,
+                    completed: _,
+                } => Error(NoSessionSupplied).into(),
+                SendLocation {
+                    player: _,
+                    location: _,
+                } => Error(NoSessionSupplied).into(),
+                AddTeam {
+                    name: _,
+                    discord_channel: _,
+                    colour: _,
+                } => Error(NoSessionSupplied).into(),
+                AssignPlayerToTeam { player: _, team: _ } => Error(NoSessionSupplied).into(),
             },
         }
     }
