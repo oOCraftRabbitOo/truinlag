@@ -1137,7 +1137,7 @@ impl Engine {
             },
             None => match command.action {
                 GetPlayerByPassphrase(passphrase) => {
-                    println!("getting player by passphrase {}", passphrase);
+                    println!("Engine: getting player by passphrase {}", passphrase);
                     let doc = self
                         .db
                         .view::<PlayersByPassphrase>()
@@ -1146,7 +1146,7 @@ impl Engine {
                         .unwrap();
                     match doc.len() {
                         0 => {
-                            println!("no player found, returning not found error");
+                            println!("Engine: no player found, returning not found error");
                             EngineResponse {
                                 response_action: ResponseAction::Error(commands::Error::NotFound),
                                 broadcast_action: None,
@@ -1162,7 +1162,10 @@ impl Engine {
                             }
                         }
                         _ => {
-                            eprintln!("Multiple players seem to have passphrase {}", passphrase);
+                            eprintln!(
+                                "Engine: Multiple players seem to have passphrase {}",
+                                passphrase
+                            );
                             EngineResponse {
                                 response_action: ResponseAction::Error(
                                     commands::Error::AmbiguousData,

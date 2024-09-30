@@ -366,6 +366,6 @@ async fn ctrlc(tx: mpsc::Sender<EngineSignal>) {
     tokio::signal::ctrl_c()
         .await
         .expect("should be able to await ctrl-c");
-    println!("Keyboard interrupt");
+    println!("ctrlc: received keyboard interrupt :))))");
     let _ = tx.send(EngineSignal::Shutdown).await;
 }
