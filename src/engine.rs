@@ -1280,6 +1280,22 @@ impl Engine {
                 },
                 SetPlayerSession { player, session } => {
                     self.get_from_db::<PlayerEntry, _, _>(player, |mut doc| {
+                        if let Some(s) = session {
+                            match Session::get(&s, &self.db) {
+                                Err(err) => {
+                                    eprintln!("Couldn't get Session from db: {}", err);
+                                    return ResponseAction::Error(commands::Error::InternalError)
+                                        .into();
+                                }
+                                Ok(doc) => match doc {
+                                    Some(_) => (),
+                                    None => {
+                                        return ResponseAction::Error(commands::Error::NotFound)
+                                            .into()
+                                    }
+                                },
+                            }
+                        }
                         let old_session = doc.contents.session;
                         doc.contents.session = session;
                         if let Some(old_session) = old_session {
