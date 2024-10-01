@@ -43,6 +43,13 @@ impl Jpeg {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GameSession {
+    pub name: String,
+    pub mode: Mode,
+    pub id: u64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub enum TeamRole {
     Runner,

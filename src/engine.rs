@@ -780,6 +780,25 @@ where
     }
 }
 
+fn get_all_from_db<T, F, Cn>(connection: &Cn, on_success: F) -> EngineResponse
+where
+    T: SerializedCollection,
+    F: Fn(Vec<CollectionDocument<T>>) -> EngineResponse,
+    Cn: Connection,
+{
+    match T::all(connection).query() {
+        Ok(docs) => on_success(docs),
+        Err(err) => {
+            eprintln!(
+                "Engine: Couldn't get all {} from db: {}",
+                std::any::type_name::<T>(),
+                err
+            );
+            ResponseAction::Error(commands::Error::InternalError).into()
+        }
+    }
+}
+
 fn update_in_db<T, Cn>(connection: &Cn, doc: CollectionDocument<T>) -> EngineResponse
 where
     T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
@@ -874,6 +893,14 @@ impl Session {
             discord_admin_channel: None,
             game: None,
             past_games: Vec::new(),
+        }
+    }
+
+    fn to_sendable(&self, id: u64) -> GameSession {
+        GameSession {
+            name: self.name.clone(),
+            mode: self.mode,
+            id,
         }
     }
 
@@ -1308,7 +1335,23 @@ impl Engine {
                     response_action: Success,
                     broadcast_action: Some(BroadcastAction::Pinged(payload)),
                 },
-                GetState => Error(NoSessionSupplied).into(),
+                GetState => get_all_from_db::<Session, _, _>(&self.db, |docs| {
+                    let sessions: Vec<GameSession> = docs
+                        .iter()
+                        .map(|doc| doc.contents.to_sendable(doc.header.id))
+                        .collect();
+                    get_all_from_db::<PlayerEntry, _, _>(&self.db, move |docs| {
+                        let players = docs
+                            .iter()
+                            .map(|doc| doc.contents.to_sendable(doc.header.id))
+                            .collect();
+                        ResponseAction::SendGlobalState {
+                            sessions: sessions.clone(),
+                            players,
+                        }
+                        .into()
+                    })
+                }),
                 Start => Error(NoSessionSupplied).into(),
                 Stop => Error(NoSessionSupplied).into(),
                 Catch {
