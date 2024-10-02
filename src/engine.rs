@@ -666,7 +666,11 @@ impl TeamEntry {
                 .iter()
                 .map(|c| c.to_sendable())
                 .collect(),
-            location: (self.locations[0].0, self.locations[0].1),
+            location: if self.locations.len() > 0 {
+                Some((self.locations[0].0, self.locations[0].1))
+            } else {
+                None
+            },
         }
     }
 }
