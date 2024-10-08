@@ -226,6 +226,7 @@ pub struct InactiveRecvConnection {
 impl InactiveRecvConnection {
     pub async fn activate(self) -> RecvConnection {
         self.eater_handle.abort();
+        let _ = self.eater_handle.await;
         let broadcast_recv = Arc::into_inner(self.broadcast_recv).unwrap().into_inner();
         RecvConnection {
             handle: self.handle,
