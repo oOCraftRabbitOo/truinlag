@@ -924,10 +924,16 @@ impl Session {
                         response_action: ResponseAction::Error(commands::Error::NotFound),
                         broadcast_action: None,
                     },
-                    Some(team) => EngineResponse {
-                        response_action: ResponseAction::Success,
-                        broadcast_action: Some(BroadcastAction::Location { team, location }),
-                    },
+                    Some(team) => {
+                        self.teams[team].locations.insert(
+                            0,
+                            (location.0, location.1, chrono::offset::Local::now().time()),
+                        );
+                        EngineResponse {
+                            response_action: ResponseAction::Success,
+                            broadcast_action: Some(BroadcastAction::Location { team, location }),
+                        }
+                    }
                 }
             }
             AssignPlayerToTeam { player, team } => {
