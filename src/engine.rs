@@ -1,5 +1,5 @@
 use bonsaidb::core::connection::{Connection, StorageConnection};
-use bonsaidb::core::document::{CollectionDocument, Emit};
+use bonsaidb::core::document::{CollectionDocument, Emit, HasHeader};
 use bonsaidb::core::key::KeyEncoding;
 use bonsaidb::core::schema::{
     Collection, CollectionMapReduce, DefaultSerialization, ReduceResult, Schema,
@@ -83,8 +83,10 @@ impl Default for Config {
             bounty_base_points: 100,
             bounty_start_points: 250,
             bounty_percentage: 0.25,
-            start_time: chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
-            end_time: chrono::NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+            start_time: chrono::NaiveTime::from_hms_opt(9, 0, 0)
+                .expect("This is hardcoded and should never fail"),
+            end_time: chrono::NaiveTime::from_hms_opt(17, 0, 0)
+                .expect("This is hardcoded and should never fail"),
             specific_minutes: 15,
             perimeter_minutes: 90,
             zkaff_minutes: 90,
@@ -166,48 +168,113 @@ impl PlayerEntry {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-enum ChallengeType {
-    Kaff,
-    Ortsspezifisch,
-    Regionsspezifisch,
-    Unspezifisch,
-    Zoneable,
+#[derive(Debug, Clone, Collection, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[collection(name = "set")]
+struct ChallengeSetEntry {
+    name: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-enum RandomPlaceType {
-    Zone,
-    SBahnZone,
+impl ChallengeSetEntry {
+    fn to_sendable(&self, id: u64) -> ChallengeSet {
+        ChallengeSet {
+            name: self.name.clone(),
+            id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "challenge", views = [UnspecificChallengeEntries, SpecificChallengeEntries, GoodChallengeEntries])]
 struct ChallengeEntry {
     kind: ChallengeType,
-    kaff: Option<String>,
+    sets: std::collections::HashSet<u64>,
+    status: ChallengeStatus,
     title: Option<String>,
     description: Option<String>,
-    kaffskala: Option<u64>,
-    grade: Option<u64>,
     random_place: Option<RandomPlaceType>,
-    points: i64,
-    repetitions: std::ops::Range<u64>,
-    points_per_rep: i64,
-    fixed: bool,
-    no_disembark: bool,
-    perimeter_override: Option<bool>,
-    zones: Vec<u64>,
-    walking_time: i64,
-    stationary_time: i64,
-    action: Option<ChallengeActionEntry>,
-    active: bool,
-    accepted: bool,
-    last_edit: chrono::DateTime<chrono::Local>,
+    place: Option<String>,
     comment: String,
+    kaffskala: Option<u8>,
+    grade: Option<u8>,
+    zone: Vec<u64>,
+    bias_sat: f32,
+    bias_sun: f32,
+    walking_time: u8,
+    stationary_time: u8,
+    additional_points: i16,
+    repetitions: std::ops::Range<u16>,
+    points_per_rep: i16,
+    station_distance: u16,
+    time_to_hb: u8,
+    departures: u8,
+    dead_end: bool,
+    no_disembark: bool,
+    fixed: bool,
+    in_perimeter_override: Option<bool>,
+    translated_titles: HashMap<String, String>,
+    translated_descriptions: HashMap<String, String>,
+    action: Option<ChallengeActionEntry>,
+    last_edit: chrono::DateTime<chrono::Local>,
 }
 
 impl ChallengeEntry {
+    fn to_sendable(&self, id: u64, db: &Database) -> Result<RawChallenge, commands::Error> {
+        Ok(RawChallenge {
+            kind: self.kind,
+            sets: {
+                let mut sets = std::collections::HashSet::new();
+                for s in self.sets.clone() {
+                    sets.insert({
+                        let set = ChallengeSetEntry::get(&s, db).or_else(|e| {
+                            eprintln!("Couldn't fetch ChallengeSet with id {} from db while making ChallengeEntry sendable: {}", s, e);
+                            Err(commands::Error::InternalError)
+                        })?.ok_or_else(|| {
+                            eprintln!("Couldn't find ChallengeSet with id {} in db, maybe it was improperly removed?", s);
+                            commands::Error::InternalError})?; set.contents.to_sendable(set.header.id)});
+                }
+                sets
+            },
+            status: self.status,
+            title: self.title.clone(),
+            description: self.description.clone(),
+            random_place: self.random_place,
+            place: self.place.clone(),
+            comment: self.comment.clone(),
+            kaffskala: self.kaffskala,
+            grade: self.grade,
+            zone: {
+                let mut zones = Vec::new();
+                for s in self.zone.clone() {
+                    zones.push({
+                        let set = ZoneEntry::get(&s, db).or_else(|e| {
+                            eprintln!("Couldn't fetch ChallengeSet with id {} from db while making ChallengeEntry sendable: {}", s, e);
+                            Err(commands::Error::InternalError)
+                        })?.ok_or_else(|| {
+                            eprintln!("Couldn't find ChallengeSet with id {} in db, maybe it was improperly removed?", s);
+                            commands::Error::InternalError})?; set.contents.to_sendable(set.header.id)});
+                }
+                zones
+            },
+            bias_sat: self.bias_sat,
+            bias_sun: self.bias_sun,
+            walking_time: self.walking_time,
+            stationary_time: self.stationary_time,
+            additional_points: self.additional_points,
+            repetitions: self.repetitions.clone(),
+            points_per_rep: self.points_per_rep,
+            station_distance: self.station_distance,
+            time_to_hb: self.time_to_hb,
+            departures: self.departures,
+            dead_end: self.dead_end,
+            no_disembark: self.no_disembark,
+            fixed: self.fixed,
+            in_perimeter_override: self.in_perimeter_override,
+            action: self.action.clone(),
+            last_edit: self.last_edit,
+            id,
+        })
+    }
+
     async fn challenge(
         &self,
         config: &Config,
@@ -215,8 +282,8 @@ impl ChallengeEntry {
         db: &Database,
     ) -> Option<InOpenChallenge> {
         // TODO: if zoneable and zone specified do something to let me know kthxbye
-        let mut points = 0;
-        points += self.points;
+        let mut points = 0_i64;
+        points += self.additional_points as i64;
         if let Some(kaffskala) = self.kaffskala {
             points += kaffskala as i64 * config.points_per_kaffness as i64;
         }
@@ -230,9 +297,9 @@ impl ChallengeEntry {
             .clone()
             .choose(&mut thread_rng())
             .unwrap_or(0);
-        points += reps as i64 * self.points_per_rep;
+        points += reps as i64 * self.points_per_rep as i64;
         let mut zone_entries = vec![];
-        let initial_zones = self.zones.clone();
+        let initial_zones = self.zone.clone();
         for zone in initial_zones {
             match db
                 .view::<ZonesByZone>()
@@ -246,7 +313,9 @@ impl ChallengeEntry {
                             zone
                         );
                     } else if zones.len() > 1 {
-                        let entry = zones.get(0).unwrap();
+                        let entry = zones
+                            .get(0)
+                            .expect("This should never fail, since zones.len() > 1");
                         eprintln!(
                             "Engine: Found {} entries for zone {} in database, using the entry with id {} for Zonenkaff",
                             zones.len(),
@@ -255,7 +324,13 @@ impl ChallengeEntry {
                             );
                         zone_entries.push(entry.document.clone())
                     } else {
-                        zone_entries.push(zones.get(0).unwrap().document.clone())
+                        zone_entries.push(
+                            zones
+                                .get(0)
+                                .expect("This should never even be called")
+                                .document
+                                .clone(),
+                        )
                     }
                 }
                 Err(err) => {
@@ -269,7 +344,11 @@ impl ChallengeEntry {
         if zone_zoneables && matches!(self.kind, ChallengeType::Zoneable) {
             match ZoneEntry::all(db).query() {
                 Ok(entries) => {
-                    zone_entries = vec![entries.iter().choose(&mut thread_rng()).unwrap().clone()]
+                    zone_entries = vec![entries
+                        .iter()
+                        .choose(&mut thread_rng())
+                        .expect("There are probably no ZoneEntries")
+                        .clone()]
                 }
                 Err(err) => {
                     eprintln!("Engine: Couldn't retreive zones from database while selecting random zone for zoneable, skipping step: {}", err)
@@ -277,7 +356,7 @@ impl ChallengeEntry {
             }
         }
         if let Some(place_type) = &self.random_place {
-            match place_type{RandomPlaceType::Zone=>{match ZoneEntry::all(db).query(){Ok(entries)=>zone_entries=vec![entries.iter().choose(&mut thread_rng()).unwrap().clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve zones from database while choosing random zone, skipping step: {}",err),}}RandomPlaceType::SBahnZone=>{match db.view::<ZonesBySBahn>().with_key(&true).query_with_collection_docs(){Ok(entries)=>zone_entries=vec![entries.documents.values().choose(&mut thread_rng()).expect("no s-bahn zones found in database").clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve s-bahn zones from database while choosing random s-bahn zone, skipping step: {}",err),}}}
+            match place_type{RandomPlaceType::Zone=>{match ZoneEntry::all(db).query(){Ok(entries)=>zone_entries=vec![entries.iter().choose(&mut thread_rng()).expect("There are probably no ZoneEntries").clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve zones from database while choosing random zone, skipping step: {}",err),}}RandomPlaceType::SBahnZone=>{match db.view::<ZonesBySBahn>().with_key(&true).query_with_collection_docs(){Ok(entries)=>zone_entries=vec![entries.documents.values().choose(&mut thread_rng()).expect("no s-bahn zones found in database").clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve s-bahn zones from database while choosing random s-bahn zone, skipping step: {}",err),}}}
         }
         let (zone, z_points) = zone_entries.iter().fold((None, 0), |acc, z| {
             if acc.1 == 0 || acc.1 > z.contents.zonic_kaffness(config) {
@@ -289,13 +368,13 @@ impl ChallengeEntry {
         points += z_points as i64;
         if !self.fixed {
             points += Normal::new(0_f64, points as f64 * config.relative_standard_deviation)
-                .unwrap()
+                .expect("This should't fail if the challenge points and the relative_standard_deviation have reasonable values")
                 .sample(&mut thread_rng())
                 .round() as i64
         }
 
         let mut title = None;
-        if let Some(kaff) = &self.kaff {
+        if let Some(kaff) = &self.place {
             title = Some(format!("Usflug Uf {}", kaff))
         }
         if let Some(title_override) = &self.title {
@@ -303,7 +382,7 @@ impl ChallengeEntry {
         }
         if let Some(_) = self.random_place {
             if let Some(t) = &mut title {
-                *t = t.replace("%p", &zone.unwrap().contents.zone.to_string())
+                *t = t.replace("%p", &zone.expect("This should never fail, because it should only run if there is exactly 1 zone_entry").contents.zone.to_string())
             }
         }
         if let Some(t) = &mut title {
@@ -311,7 +390,7 @@ impl ChallengeEntry {
         }
 
         let mut description = None;
-        if let Some(kaff) = &self.kaff {
+        if let Some(kaff) = &self.place {
             description = Some(format!("Gönd nach {}.", kaff))
         }
         if let Some(description_override) = &self.description {
@@ -319,7 +398,7 @@ impl ChallengeEntry {
         }
         if let Some(_) = self.random_place {
             if let Some(d) = &mut description {
-                *d = d.replace("%p", &zone.unwrap().contents.zone.to_string())
+                *d = d.replace("%p", &zone.expect("This should never fail, because it should only run if there is exactly 1 zone_entry").contents.zone.to_string())
             }
         }
         if let Some(d) = &mut description {
@@ -337,21 +416,15 @@ impl ChallengeEntry {
                 ChallengeActionEntry::Trap {
                     stuck_minutes: min,
                     catcher_message,
-                } => {
-                    let stuck_minutes = match min {
-                        Some(minutes) => *minutes,
-                        None => reps,
-                    };
-                    ChallengeAction::Trap {
-                        completable_after: chrono::Local::now()
-                            + chrono::Duration::minutes(min.unwrap_or(reps) as i64),
-                        catcher_message: catcher_message.clone(),
-                    }
-                }
+                } => ChallengeAction::Trap {
+                    completable_after: chrono::Local::now()
+                        + chrono::Duration::minutes(min.unwrap_or(reps as u64) as i64),
+                    catcher_message: catcher_message.clone(),
+                },
                 ChallengeActionEntry::UncompletableMinutes(minutes) => {
                     ChallengeAction::UncompletableMinutes(
                         chrono::Local::now()
-                            + chrono::Duration::minutes(minutes.unwrap_or(reps) as i64),
+                            + chrono::Duration::minutes(minutes.unwrap_or(reps as u64) as i64),
                     )
                 }
             });
@@ -378,7 +451,7 @@ impl CollectionMapReduce for GoodChallengeEntries {
     ) -> ViewMapResult<'doc, Self::View> {
         document
             .header
-            .emit_key_and_value(document.contents.active && document.contents.accepted, 1)
+            .emit_key_and_value(document.contents.status == ChallengeStatus::Approved, 1)
     }
 
     fn reduce(
@@ -406,8 +479,7 @@ impl CollectionMapReduce for UnspecificChallengeEntries {
                 ChallengeType::Unspezifisch => true,
                 ChallengeType::Ortsspezifisch => false,
                 ChallengeType::Regionsspezifisch => true,
-            } && document.contents.accepted
-                && document.contents.active,
+            } && document.contents.status == ChallengeStatus::Approved,
             1,
         )
     }
@@ -437,8 +509,7 @@ impl CollectionMapReduce for SpecificChallengeEntries {
                 ChallengeType::Unspezifisch => false,
                 ChallengeType::Ortsspezifisch => true,
                 ChallengeType::Regionsspezifisch => false,
-            } && document.contents.active
-                && document.contents.accepted,
+            } && document.contents.status == ChallengeStatus::Approved,
             1,
         )
     }
@@ -465,6 +536,19 @@ struct ZoneEntry {
 }
 
 impl ZoneEntry {
+    fn to_sendable(&self, id: u64) -> Zone {
+        Zone {
+            zone: self.zone,
+            num_conn_zones: self.num_conn_zones,
+            num_connections: self.num_connections,
+            train_through: self.train_through,
+            mongus: self.mongus,
+            s_bahn_zone: self.s_bahn_zone,
+            minutes_to: self.minutes_to.clone(),
+            id,
+        }
+    }
+
     fn zonic_kaffness(&self, config: &Config) -> u64 {
         let zonic_kaffness = ((6_f64 - self.num_conn_zones as f64)
             * config.points_per_connected_zone_less_than_6 as f64
@@ -654,8 +738,10 @@ impl TeamEntry {
                 .iter()
                 .map(|p| {
                     PlayerEntry::get(p, db)
-                        .unwrap()
-                        .unwrap()
+                        .expect(
+                            "Couldn't get player entry from database while making team sendable",
+                        )
+                        .expect("PlayerEntry not found in db while making team sendable")
                         .contents
                         .to_sendable(*p)
                 })
@@ -669,15 +755,6 @@ impl TeamEntry {
             location: (self.locations[0].0, self.locations[0].1),
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum ChallengeActionEntry {
-    UncompletableMinutes(Option<u64>), // None -> uses repetitions (%r)
-    Trap {
-        stuck_minutes: Option<u64>, // None -> uses repetitions (%r)
-        catcher_message: Option<String>,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1130,8 +1207,16 @@ impl Engine {
                     },
                     Some(mut doc) => {
                         let response = doc.contents.vroom(command.action, &self.db, doc.header.id);
-                        doc.update(&self.db).unwrap();
-                        response
+                        match doc.update(&self.db) {
+                            Ok(_) => response,
+                            Err(err) => {
+                                eprintln!(
+                                    "Couldn't update team in db after processing command: {}",
+                                    err
+                                );
+                                ResponseAction::Error(commands::Error::InternalError).into()
+                            }
+                        }
                     }
                 },
             },
@@ -1143,7 +1228,7 @@ impl Engine {
                         .view::<PlayersByPassphrase>()
                         .with_key(&passphrase)
                         .query_with_collection_docs()
-                        .unwrap();
+                        .expect("Couldn't query db while getting player by passphrase");
                     match doc.len() {
                         0 => {
                             println!("no player found, returning not found error");
@@ -1153,7 +1238,7 @@ impl Engine {
                             }
                         }
                         1 => {
-                            let document = doc.get(0).unwrap().document;
+                            let document = doc.get(0).expect("Document should always have a first entry, since it has a length of 1").document;
                             EngineResponse {
                                 response_action: ResponseAction::Player(
                                     document.contents.to_sendable(document.header.id),
@@ -1162,7 +1247,7 @@ impl Engine {
                             }
                         }
                         _ => {
-                            eprintln!("Multiple players seem to have passphrase {}", passphrase);
+                            eprintln!("Multiple players seem to have passphrase {}.", passphrase);
                             EngineResponse {
                                 response_action: ResponseAction::Error(
                                     commands::Error::AmbiguousData,

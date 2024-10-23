@@ -43,10 +43,97 @@ impl Jpeg {
     }
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub enum ChallengeType {
+    Kaff,
+    Ortsspezifisch,
+    Regionsspezifisch,
+    Unspezifisch,
+    Zoneable,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub enum TeamRole {
     Runner,
     Catcher,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+pub enum RandomPlaceType {
+    Zone,
+    SBahnZone,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub enum ChallengeStatus {
+    Approved,
+    Edited,
+    Rejected,
+    Glorious,
+    ToSort,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ChallengeActionEntry {
+    UncompletableMinutes(Option<u64>), // None -> uses repetitions (%r)
+
+    //das mit de trap isch mal es konzept, ich säg mal bitte nonig :)
+    Trap {
+        stuck_minutes: Option<u64>, // None -> uses repetitions (%r)
+        catcher_message: Option<String>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ChallengeSet {
+    pub name: String,
+    pub id: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RawChallenge {
+    pub kind: ChallengeType,
+    pub sets: std::collections::HashSet<ChallengeSet>,
+    pub status: ChallengeStatus,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub random_place: Option<RandomPlaceType>,
+    pub place: Option<String>,
+    pub comment: String,
+    pub kaffskala: Option<u8>,
+    pub grade: Option<u8>,
+    pub zone: Vec<Zone>,
+    pub bias_sat: f32,
+    pub bias_sun: f32,
+    pub walking_time: u8,
+    pub stationary_time: u8,
+    pub additional_points: i16,
+    pub repetitions: std::ops::Range<u16>,
+    pub points_per_rep: i16,
+    pub station_distance: u16,
+    pub time_to_hb: u8,
+    pub departures: u8,
+    pub dead_end: bool,
+    pub no_disembark: bool,
+    pub fixed: bool,
+    pub in_perimeter_override: Option<bool>,
+    pub translated_titles: std::collections::HashMap<String, String>,
+    pub translated_descriptions: std::collections::HashMap<String, String>,
+    pub action: Option<ChallengeActionEntry>,
+    pub last_edit: chrono::DateTime<chrono::Local>,
+    pub id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Zone {
+    pub zone: u64,
+    pub num_conn_zones: u64,
+    pub num_connections: u64,
+    pub train_through: bool,
+    pub mongus: bool,
+    pub s_bahn_zone: bool,
+    pub minutes_to: std::collections::HashMap<u64, u64>,
+    pub id: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
