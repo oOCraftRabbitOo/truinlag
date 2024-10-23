@@ -147,7 +147,7 @@ pub struct Team {
     pub challenges: Vec<Challenge>,
     pub completed_challenges: Vec<CompletedChallenge>,
     // pub thumb_name: String,
-    pub location: (f64, f64),
+    pub location: Option<(f64, f64)>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

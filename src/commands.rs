@@ -104,6 +104,10 @@ pub enum ResponseAction {
         teams: Vec<Team>,
         game: Option<Game>,
     },
+    SendGlobalState {
+        sessions: Vec<GameSession>,
+        players: Vec<Player>,
+    },
     Success,
 }
 

@@ -199,3 +199,7 @@ Alright so there is a send manager and a broadcast manager and all the broadcast
 I can await those two using a vector in another task which i await with the others using select!.
 If both the broadcast and send managers shut down, i shut down all tasks and print something appropriate.
 If there's a disconnect aka truinlag crashes, i shut down and print something appropriate too.
+
+*can i push to this repo?*
+*hmmmm*
+*jetzt müessts gah*

@@ -752,7 +752,11 @@ impl TeamEntry {
                 .iter()
                 .map(|c| c.to_sendable())
                 .collect(),
-            location: (self.locations[0].0, self.locations[0].1),
+            location: if self.locations.len() > 0 {
+                Some((self.locations[0].0, self.locations[0].1))
+            } else {
+                None
+            },
         }
     }
 }
@@ -857,6 +861,25 @@ where
     }
 }
 
+fn get_all_from_db<T, F, Cn>(connection: &Cn, on_success: F) -> EngineResponse
+where
+    T: SerializedCollection,
+    F: Fn(Vec<CollectionDocument<T>>) -> EngineResponse,
+    Cn: Connection,
+{
+    match T::all(connection).query() {
+        Ok(docs) => on_success(docs),
+        Err(err) => {
+            eprintln!(
+                "Engine: Couldn't get all {} from db: {}",
+                std::any::type_name::<T>(),
+                err
+            );
+            ResponseAction::Error(commands::Error::InternalError).into()
+        }
+    }
+}
+
 fn update_in_db<T, Cn>(connection: &Cn, doc: CollectionDocument<T>) -> EngineResponse
 where
     T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
@@ -954,6 +977,14 @@ impl Session {
         }
     }
 
+    fn to_sendable(&self, id: u64) -> GameSession {
+        GameSession {
+            name: self.name.clone(),
+            mode: self.mode,
+            id,
+        }
+    }
+
     fn vroom(&mut self, command: EngineAction, db: &Database, session_id: u64) -> EngineResponse {
         use commands::Error::*;
         use BroadcastAction::*;
@@ -970,10 +1001,16 @@ impl Session {
                         response_action: ResponseAction::Error(commands::Error::NotFound),
                         broadcast_action: None,
                     },
-                    Some(team) => EngineResponse {
-                        response_action: ResponseAction::Success,
-                        broadcast_action: Some(BroadcastAction::Location { team, location }),
-                    },
+                    Some(team) => {
+                        self.teams[team].locations.insert(
+                            0,
+                            (location.0, location.1, chrono::offset::Local::now().time()),
+                        );
+                        EngineResponse {
+                            response_action: ResponseAction::Success,
+                            broadcast_action: Some(BroadcastAction::Location { team, location }),
+                        }
+                    }
                 }
             }
             AssignPlayerToTeam { player, team } => {
@@ -1222,7 +1259,7 @@ impl Engine {
             },
             None => match command.action {
                 GetPlayerByPassphrase(passphrase) => {
-                    println!("getting player by passphrase {}", passphrase);
+                    println!("Engine: getting player by passphrase {}", passphrase);
                     let doc = self
                         .db
                         .view::<PlayersByPassphrase>()
@@ -1231,7 +1268,7 @@ impl Engine {
                         .expect("Couldn't query db while getting player by passphrase");
                     match doc.len() {
                         0 => {
-                            println!("no player found, returning not found error");
+                            println!("Engine: no player found, returning not found error");
                             EngineResponse {
                                 response_action: ResponseAction::Error(commands::Error::NotFound),
                                 broadcast_action: None,
@@ -1247,7 +1284,10 @@ impl Engine {
                             }
                         }
                         _ => {
-                            eprintln!("Multiple players seem to have passphrase {}.", passphrase);
+                            eprintln!(
+                                "Engine: Multiple players seem to have passphrase {}",
+                                passphrase
+                            );
                             EngineResponse {
                                 response_action: ResponseAction::Error(
                                     commands::Error::AmbiguousData,
@@ -1335,6 +1375,22 @@ impl Engine {
                 },
                 SetPlayerSession { player, session } => {
                     self.get_from_db::<PlayerEntry, _, _>(player, |mut doc| {
+                        if let Some(s) = session {
+                            match Session::get(&s, &self.db) {
+                                Err(err) => {
+                                    eprintln!("Couldn't get Session from db: {}", err);
+                                    return ResponseAction::Error(commands::Error::InternalError)
+                                        .into();
+                                }
+                                Ok(doc) => match doc {
+                                    Some(_) => (),
+                                    None => {
+                                        return ResponseAction::Error(commands::Error::NotFound)
+                                            .into()
+                                    }
+                                },
+                            }
+                        }
                         let old_session = doc.contents.session;
                         doc.contents.session = session;
                         if let Some(old_session) = old_session {
@@ -1390,7 +1446,23 @@ impl Engine {
                     response_action: Success,
                     broadcast_action: Some(BroadcastAction::Pinged(payload)),
                 },
-                GetState => Error(NoSessionSupplied).into(),
+                GetState => get_all_from_db::<Session, _, _>(&self.db, |docs| {
+                    let sessions: Vec<GameSession> = docs
+                        .iter()
+                        .map(|doc| doc.contents.to_sendable(doc.header.id))
+                        .collect();
+                    get_all_from_db::<PlayerEntry, _, _>(&self.db, move |docs| {
+                        let players = docs
+                            .iter()
+                            .map(|doc| doc.contents.to_sendable(doc.header.id))
+                            .collect();
+                        ResponseAction::SendGlobalState {
+                            sessions: sessions.clone(),
+                            players,
+                        }
+                        .into()
+                    })
+                }),
                 Start => Error(NoSessionSupplied).into(),
                 Stop => Error(NoSessionSupplied).into(),
                 Catch {
