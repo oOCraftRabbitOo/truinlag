@@ -270,6 +270,8 @@ impl ChallengeEntry {
             fixed: self.fixed,
             in_perimeter_override: self.in_perimeter_override,
             action: self.action.clone(),
+            translated_titles: self.translated_titles,
+            translated_descriptions: self.translated_descriptions,
             last_edit: self.last_edit,
             id,
         })
