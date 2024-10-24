@@ -7,7 +7,6 @@ use error::{Error, Result};
 use futures::prelude::*;
 use futures::SinkExt;
 use std::sync::Arc;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -32,12 +31,16 @@ enum DistributorMessage {
     Err(Error),
 }
 
-async fn connectinator(
+async fn connectinator<R, W>(
     mut send_req_recv: mpsc::Receiver<SendRequest>,
     broadcast_send: mpsc::Sender<BroadcastAction>,
-    socket_read: OwnedReadHalf,
-    socket_write: OwnedWriteHalf,
-) -> Result<()> {
+    socket_read: R,
+    socket_write: W,
+) -> Result<()>
+where
+    R: tokio::io::AsyncRead + std::marker::Unpin + std::marker::Send + 'static,
+    W: tokio::io::AsyncWrite + std::marker::Unpin + std::marker::Send + 'static,
+{
     let (command_send, mut dist_msg_recv) = mpsc::channel::<DistributorMessage>(1024);
     let response_info_send = command_send.clone();
     let res_inf_send_exp = "receiver should only be dropped once distributor shuts down, which also causes send_manager to shut down.";
@@ -151,11 +154,23 @@ pub async fn connect(address: Option<&str>) -> Result<(SendConnection, InactiveR
         .await
         .map_err(|err| Error::Connection(err))?
         .into_split();
+    insert_connection(socket_read, socket_write).await
+}
+
+pub async fn insert_connection<R, W>(
+    read: R,
+    write: W,
+) -> Result<(SendConnection, InactiveRecvConnection)>
+where
+    R: tokio::io::AsyncRead + std::marker::Unpin + std::marker::Send + 'static,
+    W: tokio::io::AsyncWrite + std::marker::Unpin + std::marker::Send + 'static,
+{
     let (broadcast_send, broadcast_recv) = mpsc::channel(1024);
     let (send_req_send, send_req_recv) = mpsc::channel(1024);
-    let handle = tokio::spawn(async move {
-        connectinator(send_req_recv, broadcast_send, socket_read, socket_write).await
-    });
+    let handle =
+        tokio::spawn(
+            async move { connectinator(send_req_recv, broadcast_send, read, write).await },
+        );
 
     Ok((
         SendConnection { send_req_send },

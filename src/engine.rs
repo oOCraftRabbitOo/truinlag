@@ -1,9 +1,9 @@
 use bonsaidb::core::connection::{Connection, StorageConnection};
-use bonsaidb::core::document::{CollectionDocument, Emit, HasHeader};
+use bonsaidb::core::document::{CollectionDocument, Emit};
 use bonsaidb::core::key::KeyEncoding;
 use bonsaidb::core::schema::{
     Collection, CollectionMapReduce, DefaultSerialization, ReduceResult, Schema,
-    SerializedCollection, SerializedView, View, ViewMapResult, ViewMappedValue, ViewSchema,
+    SerializedCollection, View, ViewMapResult, ViewMappedValue, ViewSchema,
 };
 use bonsaidb::local::config::Builder;
 use bonsaidb::local::{config, Database, Storage};
