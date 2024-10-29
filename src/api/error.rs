@@ -1,8 +1,11 @@
+use crate::commands;
+
 #[derive(Debug)]
 pub enum Error {
     Disconnect,
     InvalidSignal,
     Connection(std::io::Error),
+    Truinlag(commands::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -10,12 +13,13 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Error::Disconnect => write!(f, "Disconnected from the Truinlag engine."),
+            Error::Disconnect => write!(f, "disconnected from the Truinlag engine"),
             Error::InvalidSignal => write!(
                 f,
-                "Received invalid signal from engine (not able to deserialise to ClientCommand)."
+                "received invalid signal from engine (not able to deserialise to ClientCommand)"
             ),
-            Error::Connection(err) => write!(f, "Couldn't connect: {}", err),
+            Error::Connection(err) => write!(f, "couldn't connect: {}", err),
+            Error::Truinlag(err) => write!(f, "cruinlag returned an error: {}", err),
         }
     }
 }
@@ -23,6 +27,12 @@ impl std::fmt::Display for Error {
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         Error::Connection(error)
+    }
+}
+
+impl From<commands::Error> for Error {
+    fn from(error: commands::Error) -> Self {
+        Error::Truinlag(error)
     }
 }
 

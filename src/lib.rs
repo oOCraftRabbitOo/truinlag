@@ -1,4 +1,5 @@
 use image::{DynamicImage, ImageFormat};
+use partially;
 use serde::{Deserialize, Serialize};
 
 pub mod api;
@@ -97,7 +98,8 @@ pub struct ChallengeSet {
     pub id: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, partially::Partial)]
+#[partially(derive(Clone, Debug))]
 pub struct RawChallenge {
     pub kind: ChallengeType,
     pub sets: std::collections::HashSet<ChallengeSet>,
@@ -128,7 +130,7 @@ pub struct RawChallenge {
     pub translated_descriptions: std::collections::HashMap<String, String>,
     pub action: Option<ChallengeActionEntry>,
     pub last_edit: chrono::DateTime<chrono::Local>,
-    pub id: u64,
+    pub id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

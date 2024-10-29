@@ -88,7 +88,10 @@ pub enum EngineAction {
         player: u64,
         location: (f64, f64),
     },
+    SetRawChallenge(RawChallenge),
+    AddRawChallenge(RawChallenge),
     GetPlayerByPassphrase(String),
+    GetRawChallenges,
     Start,
     Stop,
     Ping(Option<String>),
@@ -100,6 +103,7 @@ pub enum ResponseAction {
     Error(Error),
     Team(Team),
     Player(Player),
+    SendRawChallenges(Vec<RawChallenge>),
     SendState {
         teams: Vec<Team>,
         game: Option<Game>,
@@ -154,4 +158,23 @@ pub enum Error {
     AmbiguousData,     // If multiple matching objects exist, e.g. players with passphrase lol
     InternalError,     // Some sort of internal database error
     NotImplemented,    // Feature is not yet implemented
+    BadData(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSessionSupplied => write!(f, "A sesssion specific command like 'addTeam' was called without a session being supplied."),
+            Self::SessionSupplied => write!(f, "A session unspecific command like 'addPlayer' was called with a session."),
+            Self::NotFound => write!(f, "Not Found"),
+            Self::TeamExists(team) => write!(f, "Team {} already exists", team),
+            Self::AlreadyExists => write!(f, "Already exists"),
+            Self::GameInProgress => write!(f, "There is already a game in progress"),
+            Self::GameNotRunning => write!(f, "There is no game in progress"),
+            Self::AmbiguousData => write!(f, "Ambiguous data"),
+            Self::InternalError => write!(f, "There was a truinlag-internal error"),
+            Self::NotImplemented => write!(f, "Not yet implemented"),
+            Self::BadData(text) => write!(f, "bad data: {}", text),
+        }
+    }
 }

@@ -1,7 +1,8 @@
 use crate::commands::{
-    BroadcastAction, ClientCommand, EngineCommand, EngineCommandPackage, ResponseAction,
-    ResponsePackage,
+    BroadcastAction, ClientCommand, EngineAction, EngineCommand, EngineCommandPackage,
+    ResponseAction, ResponsePackage,
 };
+use crate::*;
 use bytes::Bytes;
 use error::{Error, Result};
 use futures::prelude::*;
@@ -201,6 +202,70 @@ impl SendConnection {
             .map_err(|_| Error::Disconnect)?;
         Ok(resp_recv.await.map_err(|_| Error::Disconnect)?)
     }
+
+    pub async fn get_global_state(&mut self) -> Result<(Vec<GameSession>, Vec<Player>)> {
+        match self
+            .send(EngineCommand {
+                session: None,
+                action: EngineAction::GetState,
+            })
+            .await
+        {
+            Ok(thing) => match thing {
+                ResponseAction::SendGlobalState { sessions, players } => Ok((sessions, players)),
+                _ => Err(Error::InvalidSignal),
+            },
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn get_raw_challenges(&mut self) -> Result<Vec<RawChallenge>> {
+        match self
+            .send(EngineCommand {
+                session: None,
+                action: EngineAction::GetRawChallenges,
+            })
+            .await?
+        {
+            ResponseAction::Error(err) => Err(Error::Truinlag(err)),
+            ResponseAction::SendRawChallenges(challenges) => Ok(challenges),
+            _ => Err(Error::InvalidSignal),
+        }
+    }
+
+    pub async fn set_raw_challenge(&mut self, challenge: RawChallenge) -> Result<()> {
+        if let None = challenge.id {
+            return Err(Error::InvalidSignal);
+        }
+        match self
+            .send(EngineCommand {
+                session: None,
+                action: EngineAction::SetRawChallenge(challenge),
+            })
+            .await?
+        {
+            ResponseAction::Error(err) => Err(Error::Truinlag(err)),
+            ResponseAction::Success => Ok(()),
+            _ => Err(Error::InvalidSignal),
+        }
+    }
+
+    pub async fn add_raw_challenge(&mut self, challenge: RawChallenge) -> Result<()> {
+        if let Some(_) = challenge.id {
+            return Err(Error::InvalidSignal);
+        }
+        match self
+            .send(EngineCommand {
+                session: None,
+                action: EngineAction::AddRawChallenge(challenge),
+            })
+            .await?
+        {
+            ResponseAction::Error(err) => Err(Error::Truinlag(err)),
+            ResponseAction::Success => Ok(()),
+            _ => Err(Error::InvalidSignal),
+        }
+    }
 }
 
 pub struct RecvConnection {
@@ -252,5 +317,31 @@ impl InactiveRecvConnection {
     pub async fn disconnect(self) {
         self.eater_handle.abort();
         self.handle.abort();
+    }
+}
+
+impl commands::ResponseAction {
+    fn unwrap_team(action: commands::ResponseAction) -> Result<Team> {
+        match action {
+            ResponseAction::Team(team) => Ok(team),
+            ResponseAction::Error(error) => Err(error.into()),
+            _ => Err(Error::InvalidSignal),
+        }
+    }
+
+    fn unwrap_player(action: commands::ResponseAction) -> Result<Player> {
+        match action {
+            ResponseAction::Player(player) => Ok(player),
+            ResponseAction::Error(error) => Err(error.into()),
+            _ => Err(Error::InvalidSignal),
+        }
+    }
+
+    fn unwrap_send_state(action: commands::ResponseAction) -> Result<(Vec<Team>, Option<Game>)> {
+        match action {
+            ResponseAction::SendState { teams, game } => Ok((teams, game)),
+            ResponseAction::Error(error) => Err(error.into()),
+            _ => Err(Error::InvalidSignal),
+        }
     }
 }

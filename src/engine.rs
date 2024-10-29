@@ -1,5 +1,5 @@
 use bonsaidb::core::connection::{Connection, StorageConnection};
-use bonsaidb::core::document::{CollectionDocument, Emit};
+use bonsaidb::core::document::{CollectionDocument, Emit, HasHeader};
 use bonsaidb::core::key::KeyEncoding;
 use bonsaidb::core::schema::{
     Collection, CollectionMapReduce, DefaultSerialization, ReduceResult, Schema,
@@ -11,6 +11,7 @@ use chrono::{self, NaiveTime};
 use partially::Partial;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
+use serde::de::Error;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -273,7 +274,7 @@ impl ChallengeEntry {
             translated_titles: self.translated_titles.clone(),
             translated_descriptions: self.translated_descriptions.clone(),
             last_edit: self.last_edit,
-            id,
+            id: Some(id),
         })
     }
 
@@ -439,6 +440,42 @@ impl ChallengeEntry {
             action,
             zone,
         })
+    }
+}
+
+impl From<RawChallenge> for ChallengeEntry {
+    fn from(v: RawChallenge) -> Self {
+        ChallengeEntry {
+            kind: v.kind,
+            sets: v.sets.iter().map(|s| s.id).collect(),
+            status: v.status,
+            title: v.title,
+            description: v.description,
+            random_place: v.random_place,
+            place: v.place,
+            comment: v.comment,
+            kaffskala: v.kaffskala,
+            grade: v.grade,
+            zone: v.zone.iter().map(|z| z.id).collect(),
+            bias_sat: v.bias_sat,
+            bias_sun: v.bias_sun,
+            walking_time: v.walking_time,
+            stationary_time: v.stationary_time,
+            additional_points: v.additional_points,
+            repetitions: v.repetitions,
+            points_per_rep: v.points_per_rep,
+            station_distance: v.station_distance,
+            time_to_hb: v.time_to_hb,
+            departures: v.departures,
+            dead_end: v.dead_end,
+            no_disembark: v.no_disembark,
+            fixed: v.fixed,
+            in_perimeter_override: v.in_perimeter_override,
+            translated_titles: v.translated_titles,
+            translated_descriptions: v.translated_descriptions,
+            action: v.action,
+            last_edit: v.last_edit,
+        }
     }
 }
 
@@ -944,6 +981,33 @@ where
     }
 }
 
+fn add_to_db_and<T, Cn, F>(connection: &Cn, value: T, on_success: F) -> EngineResponse
+where
+    T: SerializedCollection<Contents = T> + 'static,
+    Cn: Connection,
+    F: Fn(CollectionDocument<T>) -> EngineResponse,
+{
+    match T::push(value, connection) {
+        Err(err) => {
+            eprintln!(
+                "Couldn't push {} into db: {}",
+                std::any::type_name::<T>(),
+                err
+            );
+            ResponseAction::Error(commands::Error::InternalError).into()
+        }
+        Ok(doc) => on_success(doc),
+    }
+}
+
+fn add_to_db<T, Cn>(connection: &Cn, value: T) -> EngineResponse
+where
+    T: SerializedCollection<Contents = T> + 'static,
+    Cn: Connection,
+{
+    add_to_db_and(connection, value, |_| ResponseAction::Success.into())
+}
+
 #[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "session")]
 struct Session {
@@ -1153,6 +1217,9 @@ impl Session {
                 passphrase: _,
                 session: _,
             } => Error(SessionSupplied).into(),
+            GetRawChallenges => Error(SessionSupplied).into(),
+            SetRawChallenge(_) => Error(SessionSupplied).into(),
+            AddRawChallenge(_) => Error(SessionSupplied).into(),
         }
     }
 }
@@ -1173,15 +1240,6 @@ impl Engine {
         .unwrap()
         .create_database::<EngineSchema>("engine", true)
         .unwrap();
-
-        /*
-        let sessions = Session::all(&db)
-            .query()
-            .unwrap()
-            .into_iter()
-            .map(|doc| doc.contents.clone().init(&store, db.clone()))
-            .collect();
-        */
 
         Engine { db }
     }
@@ -1260,6 +1318,35 @@ impl Engine {
                 },
             },
             None => match command.action {
+                GetRawChallenges => get_all_from_db::<ChallengeEntry, _, _>(&self.db, |entries| {
+                    SendRawChallenges(
+                        entries
+                            .iter()
+                            .filter_map(|entry| {
+                                entry.contents.to_sendable(entry.header.id, &self.db).ok()
+                            })
+                            .collect(),
+                    )
+                    .into()
+                }),
+                SetRawChallenge(challenge) => match challenge.id {
+                    Some(id) => {
+                        self.get_from_db::<ChallengeEntry, _, _>(id, |mut doc| {
+                            doc.contents = challenge.clone().into();
+                            self.update_in_db(doc)
+                        })
+                    }
+                    None => {
+                        Error(commands::Error::BadData(
+                            "the supplied challenge doesn't have an id. this can happen because the RawChallenge::new() method doesn't assign an id. challenges sent from truinlag have an id."
+                            .into()))
+                        .into()
+                    }
+                },
+                AddRawChallenge(challenge) => {
+                    let entry: ChallengeEntry = challenge.clone().into();
+                    add_to_db(&self.db, entry)
+                }
                 GetPlayerByPassphrase(passphrase) => {
                     println!("Engine: getting player by passphrase {}", passphrase);
                     let doc = self
