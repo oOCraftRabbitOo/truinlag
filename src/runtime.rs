@@ -339,6 +339,7 @@ async fn io(
                 }
                 Err(err) => return Err(err.into()),
             }
+            count += 1;
         }
 
         Ok(())

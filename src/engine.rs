@@ -1,5 +1,5 @@
 use bonsaidb::core::connection::{Connection, StorageConnection};
-use bonsaidb::core::document::{CollectionDocument, Emit, HasHeader};
+use bonsaidb::core::document::{CollectionDocument, Emit};
 use bonsaidb::core::key::KeyEncoding;
 use bonsaidb::core::schema::{
     Collection, CollectionMapReduce, DefaultSerialization, ReduceResult, Schema,
@@ -11,7 +11,6 @@ use chrono::{self, NaiveTime};
 use partially::Partial;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
-use serde::de::Error;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -1058,6 +1057,7 @@ impl Session {
         use ResponseAction::*;
         match command {
             SendLocation { player, location } => {
+                println!("Engine: received SendLocation");
                 match self
                     .teams
                     .iter()
@@ -1072,6 +1072,7 @@ impl Session {
                             0,
                             (location.0, location.1, chrono::offset::Local::now().time()),
                         );
+                        println!("Engine: done with SendLocation");
                         EngineResponse {
                             response_action: ResponseAction::Success,
                             broadcast_action: Some(BroadcastAction::Location { team, location }),
