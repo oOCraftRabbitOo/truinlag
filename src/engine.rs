@@ -1,25 +1,31 @@
-use bonsaidb::core::connection::{Connection, StorageConnection};
-use bonsaidb::core::document::{CollectionDocument, Emit};
-use bonsaidb::core::key::KeyEncoding;
-use bonsaidb::core::schema::{
-    Collection, CollectionMapReduce, DefaultSerialization, ReduceResult, Schema,
-    SerializedCollection, View, ViewMapResult, ViewMappedValue, ViewSchema,
+use super::runtime::InternEngineResponse;
+use bonsaidb::{
+    core::{
+        connection::{Connection, StorageConnection},
+        document::{CollectionDocument, Emit, Header},
+        key::KeyEncoding,
+        schema::{
+            Collection, CollectionMapReduce, DefaultSerialization, ReduceResult, Schema,
+            SerializedCollection, View, ViewMapResult, ViewMappedValue, ViewSchema,
+        },
+    },
+    local::{
+        config::{self, Builder},
+        Database, Storage,
+    },
 };
-use bonsaidb::local::config::Builder;
-use bonsaidb::local::{config, Database, Storage};
 use chrono::{self, NaiveTime};
+use image::imageops::FilterType;
 use partially::Partial;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::Path;
-use std::usize;
+use std::{collections::HashMap, path::Path, usize};
 use strsim::normalized_damerau_levenshtein as strcmp;
-use truinlag::commands::{
-    BroadcastAction, EngineAction, EngineCommand, EngineResponse, ResponseAction,
+use truinlag::{
+    commands::{BroadcastAction, EngineAction, EngineCommand, EngineResponse, ResponseAction},
+    *,
 };
-use truinlag::*;
 
 #[derive(Partial, Debug, Clone, Serialize, Deserialize)]
 #[partially(derive(Debug, Clone, Serialize, Deserialize, Default))]
@@ -146,8 +152,48 @@ impl Default for Config {
 }
 
 #[derive(Schema)]
-#[schema(name="engine", collections=[Session, PlayerEntry, ChallengeEntry, ZoneEntry])]
+#[schema(name="engine", collections=[Session, PlayerEntry, ChallengeEntry, ZoneEntry, PastGame, PictureEntry])]
 struct EngineSchema {}
+
+#[derive(Debug, Collection, Serialize, Deserialize, Clone)]
+#[collection(name = "picture")]
+enum PictureEntry {
+    Profile { small: Picture, large: Picture },
+    ChallengePicture(Picture),
+}
+
+impl PictureEntry {
+    fn new_profile(image: image::DynamicImage) -> Result<Self, image::ImageError> {
+        let (x, y, width, height) = if image.width() > image.height() {
+            (
+                (image.width() - image.height()) / 2,
+                0,
+                image.height(),
+                image.height(),
+            )
+        } else {
+            (
+                0,
+                (image.height() - image.width()) / 2,
+                image.width(),
+                image.width(),
+            )
+        };
+        let image = image.crop_imm(x, y, width, height);
+
+        let small = image.resize(128, 128, FilterType::CatmullRom);
+        let large = image.resize(512, 512, FilterType::CatmullRom);
+
+        Ok(Self::Profile {
+            small: small.try_into()?,
+            large: large.try_into()?,
+        })
+    }
+
+    fn new_challenge_picture(image: image::DynamicImage) -> Result<Self, image::ImageError> {
+        Ok(Self::ChallengePicture(image.try_into()?))
+    }
+}
 
 #[derive(Debug, Collection, Serialize, Deserialize, Clone)]
 #[collection(name = "player", views = [PlayersByPassphrase])]
@@ -728,7 +774,7 @@ pub struct ChompletedChallengePeriod {
     description: String,
     zone: Option<u64>,
     points: u64,
-    photo: truinlag::Jpeg,
+    photo: u64,
     time: chrono::NaiveTime,
     position_start_index: u64,
     position_end_index: u64,
@@ -863,7 +909,8 @@ impl InGame {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Collection)]
+#[collection(name = "past game")]
 struct PastGame {
     name: String,
     date: chrono::NaiveDate,
@@ -1018,7 +1065,6 @@ struct Session {
     discord_game_channel: Option<u64>,
     discord_admin_channel: Option<u64>,
     game: Option<InGame>,
-    past_games: Vec<PastGame>,
 }
 
 impl Session {
@@ -1038,7 +1084,6 @@ impl Session {
             discord_game_channel: None,
             discord_admin_channel: None,
             game: None,
-            past_games: Vec::new(),
         }
     }
 
@@ -1130,7 +1175,7 @@ impl Session {
                 completed,
             } => match self.teams.get_mut(completer) {
                 Some(completer) => match completer.challenges.get_mut(completed) {
-                    Some(completed) => todo!(),
+                    Some(_completed) => todo!(),
                     None => todo!(),
                 },
                 None => todo!(),
@@ -1225,10 +1270,20 @@ impl Session {
     }
 }
 
+struct DBEntry<T> {
+    id: u64,
+    contents: T,
+}
+
 pub struct Engine {
     db: Database,
-    // store: Storage, --- Don't need that no more, everything stored in the db
-    // sessions: Vec<Session>, --- see above
+
+    sessions: Vec<DBEntry<Session>>,
+    challenges: Vec<DBEntry<ChallengeEntry>>,
+    players: Vec<DBEntry<PlayerEntry>>,
+
+    pictures: Vec<Header>,
+    past_games: Vec<Header>,
 }
 
 impl Engine {
@@ -1242,7 +1297,36 @@ impl Engine {
         .create_database::<EngineSchema>("engine", true)
         .unwrap();
 
-        Engine { db }
+        fn make_entry_vector<T>(db: &Database) -> Vec<DBEntry<T>>
+        where
+            T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+        {
+            T::all(db)
+                .query()
+                .unwrap()
+                .into_iter()
+                .map(|d| DBEntry {
+                    id: d.header.id,
+                    contents: d.contents,
+                })
+                .collect()
+        }
+
+        let challenges = make_entry_vector::<ChallengeEntry>(&db);
+        let sessions = make_entry_vector::<Session>(&db);
+        let players = make_entry_vector::<PlayerEntry>(&db);
+
+        let past_games = PastGame::all(&db).headers().unwrap();
+        let pictures = PictureEntry::all(&db).headers().unwrap();
+
+        Engine {
+            db,
+            challenges,
+            sessions,
+            players,
+            past_games,
+            pictures,
+        }
     }
 
     fn get_from_db<T, F, I>(&self, id: I, on_success: F) -> EngineResponse
@@ -1284,12 +1368,12 @@ impl Engine {
         delete_from_db_and(&self.db, doc, on_success)
     }
 
-    pub fn vroom(&self, command: EngineCommand) -> EngineResponse {
+    pub fn vroom(&mut self, command: EngineCommand) -> InternEngineResponse {
         use commands::Error::*;
         use BroadcastAction::*;
         use EngineAction::*;
         use ResponseAction::*;
-        match command.session {
+        InternEngineResponse::DirectResponse(match command.session {
             Some(id) => match Session::get(&id, &self.db) {
                 Err(err) => {
                     eprintln!("Couldn't retrieve session from db: {}", err);
@@ -1574,6 +1658,6 @@ impl Engine {
                 } => Error(NoSessionSupplied).into(),
                 AssignPlayerToTeam { player: _, team: _ } => Error(NoSessionSupplied).into(),
             },
-        }
+        })
     }
 }

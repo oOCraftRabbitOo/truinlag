@@ -13,25 +13,25 @@ pub struct Colour {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Jpeg {
+pub struct Picture {
     data: Vec<u8>,
 }
 
-impl TryFrom<DynamicImage> for Jpeg {
+impl TryFrom<DynamicImage> for Picture {
     type Error = image::ImageError;
     fn try_from(img: DynamicImage) -> Result<Self, image::ImageError> {
         Self::from_img(img)
     }
 }
 
-impl TryFrom<Jpeg> for DynamicImage {
+impl TryFrom<Picture> for DynamicImage {
     type Error = image::ImageError;
-    fn try_from(jpeg: Jpeg) -> Result<Self, image::ImageError> {
+    fn try_from(jpeg: Picture) -> Result<Self, image::ImageError> {
         jpeg.try_into_img()
     }
 }
 
-impl Jpeg {
+impl Picture {
     pub fn from_img(img: DynamicImage) -> Result<Self, image::ImageError> {
         let mut buff = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buff, ImageFormat::Jpeg)?;
@@ -40,7 +40,7 @@ impl Jpeg {
         })
     }
     pub fn try_into_img(self) -> Result<DynamicImage, image::ImageError> {
-        image::load_from_memory_with_format(&self.data, ImageFormat::Jpeg)
+        image::load_from_memory_with_format(&self.data, ImageFormat::Avif)
     }
 }
 

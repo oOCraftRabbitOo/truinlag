@@ -24,6 +24,11 @@ pub enum EngineSignal {
     Shutdown,
 }
 
+pub enum InternEngineResponse {
+    DirectResponse(EngineResponse),
+    DelayedResponse(tokio::task::JoinHandle<EngineResponse>),
+}
+
 #[derive(Clone, Debug)]
 pub enum IOSignal {
     Command(commands::ClientCommand),
@@ -190,7 +195,7 @@ async fn engine(
 ) -> Result<()> {
     let broadcast_send_error =
         "Engine: The broadcast channel should never be closed because of `_broadcast_rx_staller`";
-    let engine = engine::Engine::init(Path::new("truintabase"));
+    let mut engine = engine::Engine::init(Path::new("truintabase"));
     loop {
         match mpsc_handle
             .recv()
@@ -210,7 +215,7 @@ async fn engine(
                             broadcast_handle.receiver_count()
                         )
                     }
-                    if let Err(err) = broadcast_handle.broadcast(message).await {
+                    if let Err(err) = broadcast_handle.broadcast_direct(message).await {
                         println!("{}: {}", broadcast_send_error, err);
                     };
                 }
