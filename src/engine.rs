@@ -1056,6 +1056,32 @@ impl Session {
         use EngineAction::*;
         use ResponseAction::*;
         match command {
+            MakeTeamCatcher(id) => match self.teams.get_mut(id) {
+                None => Error(NotFound).into(),
+                Some(team) => match team.role {
+                    TeamRole::Catcher => Success.into(),
+                    TeamRole::Runner => {
+                        team.role = TeamRole::Catcher;
+                        EngineResponse {
+                            response_action: Success,
+                            broadcast_action: Some(TeamMadeCatcher(team.to_sendable(db, id))),
+                        }
+                    }
+                },
+            },
+            MakeTeamRunner(id) => match self.teams.get_mut(id) {
+                None => Error(NotFound).into(),
+                Some(team) => match team.role {
+                    TeamRole::Runner => Success.into(),
+                    TeamRole::Catcher => {
+                        team.role = TeamRole::Runner;
+                        EngineResponse {
+                            response_action: Success,
+                            broadcast_action: Some(TeamMadeRunner(team.to_sendable(db, id))),
+                        }
+                    }
+                },
+            },
             SendLocation { player, location } => {
                 println!("Engine: received SendLocation");
                 match self
@@ -1573,6 +1599,8 @@ impl Engine {
                     colour: _,
                 } => Error(NoSessionSupplied).into(),
                 AssignPlayerToTeam { player: _, team: _ } => Error(NoSessionSupplied).into(),
+                MakeTeamRunner(_) => Error(NoSessionSupplied).into(),
+                MakeTeamCatcher(_) => Error(NoSessionSupplied).into(),
             },
         }
     }

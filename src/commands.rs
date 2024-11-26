@@ -96,6 +96,8 @@ pub enum EngineAction {
     Stop,
     Ping(Option<String>),
     GetState,
+    MakeTeamCatcher(usize),
+    MakeTeamRunner(usize),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -144,6 +146,8 @@ pub enum BroadcastAction {
         to_team: Option<usize>,
     },
     PlayerDeleted(Player),
+    TeamMadeCatcher(Team),
+    TeamMadeRunner(Team),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
