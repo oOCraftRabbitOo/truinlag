@@ -98,6 +98,14 @@ pub enum EngineAction {
     GetState,
     MakeTeamCatcher(usize),
     MakeTeamRunner(usize),
+    AddChallengeToTeam {
+        team: usize,
+        challenge: Challenge,
+    },
+    RenameTeam {
+        team: usize,
+        new_name: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

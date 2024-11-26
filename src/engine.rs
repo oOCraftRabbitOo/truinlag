@@ -1056,6 +1056,27 @@ impl Session {
         use EngineAction::*;
         use ResponseAction::*;
         match command {
+            AddChallengeToTeam { team, challenge } => match self.teams.get_mut(team) {
+                // THIS METHOD SHOULD BE TEMPORARY AND EXISTS ONLY FOR TESTING PURPOSES
+                None => Error(NotFound).into(),
+                Some(team) => {
+                    team.challenges.push(InOpenChallenge {
+                        title: challenge.title,
+                        description: challenge.description,
+                        points: challenge.points,
+                        action: None,
+                        zone: None,
+                    });
+                    Success.into()
+                }
+            },
+            RenameTeam { team, new_name } => match self.teams.get_mut(team) {
+                None => Error(NotFound).into(),
+                Some(team) => {
+                    team.name = new_name;
+                    Success.into()
+                }
+            },
             MakeTeamCatcher(id) => match self.teams.get_mut(id) {
                 None => Error(NotFound).into(),
                 Some(team) => match team.role {
@@ -1601,6 +1622,8 @@ impl Engine {
                 AssignPlayerToTeam { player: _, team: _ } => Error(NoSessionSupplied).into(),
                 MakeTeamRunner(_) => Error(NoSessionSupplied).into(),
                 MakeTeamCatcher(_) => Error(NoSessionSupplied).into(),
+                AddChallengeToTeam { team: _, challenge: _ } => Error(NoSessionSupplied).into(),
+                RenameTeam { team: _, new_name: _ } => Error(NoSessionSupplied).into(),
             },
         }
     }
