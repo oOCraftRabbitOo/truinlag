@@ -1,5 +1,4 @@
 use image::{DynamicImage, ImageFormat};
-use partially;
 use serde::{Deserialize, Serialize};
 
 pub mod api;

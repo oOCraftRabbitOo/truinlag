@@ -1,10 +1,6 @@
 use crate::runtime::{EngineSignal, IOSignal};
 use async_broadcast as broadcast;
-use reqwest;
-use ron;
-use std;
 use std::io;
-use tokio;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinError;
 
@@ -16,16 +12,16 @@ pub enum Error {
     Ron(ron::Error),
     Reqwest(reqwest::Error),
     Bincode(bincode::Error),
-    BroadcastRecvError(broadcast::RecvError),
-    BroadcastSendError(broadcast::SendError<IOSignal>),
-    MpscSendError(mpsc::error::SendError<EngineSignal>),
-    ClientCommandSendError(mpsc::error::SendError<IOSignal>),
-    MpscOneshotRecvSendError(mpsc::error::SendError<oneshot::Receiver<IOSignal>>),
-    OneshotRecvError(oneshot::error::RecvError),
-    ResponseSendError,
-    JoinError(JoinError),
-    MutexError,
-    PlayerNotFound {
+    BroadcastRecv(broadcast::RecvError),
+    BroadcastSend(broadcast::SendError<IOSignal>),
+    MpscSend(mpsc::error::SendError<EngineSignal>),
+    ClientCommandSend(mpsc::error::SendError<IOSignal>),
+    MpscOneshotRecvSend(mpsc::error::SendError<oneshot::Receiver<IOSignal>>),
+    OneshotRecv(oneshot::error::RecvError),
+    ResponseSend,
+    Join(JoinError),
+    Mutex,
+    PlayerNot {
         player_name: String,
         team_name: String,
     },
@@ -38,20 +34,20 @@ impl std::fmt::Display for Error {
             Error::Io(err) => write!(f, "I/O error: {}", err),
             Error::Ron(err) => write!(f, "Deserialisation error: {}", err),
             Error::Reqwest(err) => write!(f, "http reqwest error: {}", err),
-            Error::MpscSendError(err) => write!(f, "Couldn't send message to engine: {}", err),
-            Error::ClientCommandSendError(err) => write!(f, "mpsc send error: {}", err),
-            Error::OneshotRecvError(err) => write!(f, "Couldn't recv message from engine: {}", err),
-            Error::BroadcastSendError(err) => write!(f, "Couldn't send broadcast: {}", err),
-            Error::ResponseSendError => write!(
+            Error::MpscSend(err) => write!(f, "Couldn't send message to engine: {}", err),
+            Error::ClientCommandSend(err) => write!(f, "mpsc send error: {}", err),
+            Error::OneshotRecv(err) => write!(f, "Couldn't recv message from engine: {}", err),
+            Error::BroadcastSend(err) => write!(f, "Couldn't send broadcast: {}", err),
+            Error::ResponseSend => write!(
                 f,
                 "The engine task couldn't send a response throught the oneshot channel"
             ),
-            Error::MpscOneshotRecvSendError(err) => {
+            Error::MpscOneshotRecvSend(err) => {
                 write!(f, "Couldn't send the oneshot_recv: {}", err)
             }
-            Error::JoinError(err) => write!(f, "error joining task: {}", err),
+            Error::Join(err) => write!(f, "error joining task: {}", err),
             Error::IDontCareAnymore => write!(f, "a miscellaneous error occured"),
-            Error::MutexError => write!(
+            Error::Mutex => write!(
                 f,
                 "Error acquiring mutex lock, other thread might have panicked"
             ),
@@ -60,10 +56,10 @@ impl std::fmt::Display for Error {
                 "ipc en/decode error, client might be incompatible: {}",
                 err
             ),
-            Error::BroadcastRecvError(err) => {
+            Error::BroadcastRecv(err) => {
                 write!(f, "error receiving message from engine {}", err)
             }
-            Error::PlayerNotFound {
+            Error::PlayerNot {
                 player_name,
                 team_name,
             } => write!(
@@ -107,37 +103,37 @@ impl From<bincode::Error> for Error {
 
 impl From<broadcast::RecvError> for Error {
     fn from(error: broadcast::RecvError) -> Self {
-        Error::BroadcastRecvError(error)
+        Error::BroadcastRecv(error)
     }
 }
 
 impl From<mpsc::error::SendError<EngineSignal>> for Error {
     fn from(error: mpsc::error::SendError<EngineSignal>) -> Self {
-        Error::MpscSendError(error)
+        Error::MpscSend(error)
     }
 }
 
 impl From<mpsc::error::SendError<IOSignal>> for Error {
     fn from(error: mpsc::error::SendError<IOSignal>) -> Self {
-        Error::ClientCommandSendError(error)
+        Error::ClientCommandSend(error)
     }
 }
 
 impl From<mpsc::error::SendError<oneshot::Receiver<IOSignal>>> for Error {
     fn from(error: mpsc::error::SendError<oneshot::Receiver<IOSignal>>) -> Self {
-        Error::MpscOneshotRecvSendError(error)
+        Error::MpscOneshotRecvSend(error)
     }
 }
 
 impl From<oneshot::error::RecvError> for Error {
     fn from(error: oneshot::error::RecvError) -> Self {
-        Error::OneshotRecvError(error)
+        Error::OneshotRecv(error)
     }
 }
 
 impl From<broadcast::SendError<IOSignal>> for Error {
     fn from(error: broadcast::SendError<IOSignal>) -> Self {
-        Error::BroadcastSendError(error)
+        Error::BroadcastSend(error)
     }
 }
 

@@ -1,4 +1,4 @@
-use super::runtime::InternEngineResponse;
+use super::runtime::{InternEngineCommand, InternEngineResponse, InternEngineResponsePackage};
 use bonsaidb::{
     core::{
         connection::{Connection, StorageConnection},
@@ -20,10 +20,10 @@ use partially::Partial;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path, usize};
+use std::{collections::HashMap, path::Path};
 use strsim::normalized_damerau_levenshtein as strcmp;
 use truinlag::{
-    commands::{BroadcastAction, EngineAction, EngineCommand, EngineResponse, ResponseAction},
+    commands::{BroadcastAction, EngineAction, EngineResponse, ResponseAction},
     *,
 };
 
@@ -162,6 +162,7 @@ enum PictureEntry {
     ChallengePicture(Picture),
 }
 
+#[allow(dead_code)]
 impl PictureEntry {
     fn new_profile(image: image::DynamicImage) -> Result<Self, image::ImageError> {
         let (x, y, width, height) = if image.width() > image.height() {
@@ -264,19 +265,21 @@ struct ChallengeEntry {
 }
 
 impl ChallengeEntry {
-    fn to_sendable(&self, id: u64, db: &Database) -> Result<RawChallenge, commands::Error> {
+    fn to_sendable(
+        &self,
+        id: u64,
+        challenge_sets: &[DBEntry<ChallengeSetEntry>],
+        zone_entries: &[DBEntry<ZoneEntry>],
+    ) -> Result<RawChallenge, commands::Error> {
         Ok(RawChallenge {
             kind: self.kind,
             sets: {
                 let mut sets = std::collections::HashSet::new();
                 for s in self.sets.clone() {
                     sets.insert({
-                        let set = ChallengeSetEntry::get(&s, db).or_else(|e| {
-                            eprintln!("Couldn't fetch ChallengeSet with id {} from db while making ChallengeEntry sendable: {}", s, e);
-                            Err(commands::Error::InternalError)
-                        })?.ok_or_else(|| {
-                            eprintln!("Couldn't find ChallengeSet with id {} in db, maybe it was improperly removed?", s);
-                            commands::Error::InternalError})?; set.contents.to_sendable(set.header.id)});
+                        let set = challenge_sets.iter().find(|c| c.id == s).ok_or_else(|| {
+                            eprintln!("Couldn't find ChallengeSet with id {} in db while making challenge with id {} sendable, maybe it was improperly removed?", s, id);
+                            commands::Error::InternalError})?; set.contents.to_sendable(set.id)});
                 }
                 sets
             },
@@ -292,12 +295,9 @@ impl ChallengeEntry {
                 let mut zones = Vec::new();
                 for s in self.zone.clone() {
                     zones.push({
-                        let set = ZoneEntry::get(&s, db).or_else(|e| {
-                            eprintln!("Couldn't fetch ChallengeSet with id {} from db while making ChallengeEntry sendable: {}", s, e);
-                            Err(commands::Error::InternalError)
-                        })?.ok_or_else(|| {
+                        let set = zone_entries.iter().find(|z| z.id == s).ok_or_else(|| {
                             eprintln!("Couldn't find ChallengeSet with id {} in db, maybe it was improperly removed?", s);
-                            commands::Error::InternalError})?; set.contents.to_sendable(set.header.id)});
+                            commands::Error::InternalError})?; set.contents.to_sendable(set.id)});
                 }
                 zones
             },
@@ -323,6 +323,7 @@ impl ChallengeEntry {
         })
     }
 
+    #[allow(dead_code)]
     async fn challenge(
         &self,
         config: &Config,
@@ -355,7 +356,7 @@ impl ChallengeEntry {
                 .query_with_collection_docs()
             {
                 Ok(zones) => {
-                    if zones.len() == 0 {
+                    if zones.is_empty() {
                         eprintln!(
                             "Engine: Couldn't find zone {} in database, skipping Zonenkaff and granting 0 points",
                             zone
@@ -428,7 +429,7 @@ impl ChallengeEntry {
         if let Some(title_override) = &self.title {
             title = Some(title_override.clone())
         }
-        if let Some(_) = self.random_place {
+        if self.random_place.is_some() {
             if let Some(t) = &mut title {
                 *t = t.replace("%p", &zone.expect("This should never fail, because it should only run if there is exactly 1 zone_entry").contents.zone.to_string())
             }
@@ -444,7 +445,7 @@ impl ChallengeEntry {
         if let Some(description_override) = &self.description {
             description = Some(description_override.clone())
         }
-        if let Some(_) = self.random_place {
+        if self.random_place.is_some() {
             if let Some(d) = &mut description {
                 *d = d.replace("%p", &zone.expect("This should never fail, because it should only run if there is exactly 1 zone_entry").contents.zone.to_string())
             }
@@ -453,10 +454,7 @@ impl ChallengeEntry {
             *d = d.replace("%r", &reps.to_string());
         }
 
-        let zone = match zone {
-            Some(z) => Some(z.header.id),
-            None => None,
-        };
+        let zone = zone.map(|z| z.header.id);
 
         let mut action = None;
         if let Some(action_entry) = &self.action {
@@ -810,7 +808,7 @@ impl TeamEntry {
         }
     }
 
-    pub fn to_sendable(&self, db: &Database, index: usize) -> truinlag::Team {
+    fn to_sendable(&self, player_entries: &[DBEntry<PlayerEntry>], index: usize) -> truinlag::Team {
         truinlag::Team {
             role: self.role,
             name: self.name.clone(),
@@ -821,10 +819,9 @@ impl TeamEntry {
                 .players
                 .iter()
                 .map(|p| {
-                    PlayerEntry::get(p, db)
-                        .expect(
-                            "Couldn't get player entry from database while making team sendable",
-                        )
+                    player_entries
+                        .iter()
+                        .find(|pp| &pp.id == p)
                         .expect("PlayerEntry not found in db while making team sendable")
                         .contents
                         .to_sendable(*p)
@@ -836,7 +833,7 @@ impl TeamEntry {
                 .iter()
                 .map(|c| c.to_sendable())
                 .collect(),
-            location: if self.locations.len() > 0 {
+            location: if !self.locations.is_empty() {
                 Some((self.locations[0].0, self.locations[0].1))
             } else {
                 None
@@ -864,6 +861,7 @@ pub struct InOpenChallenge {
 }
 
 impl InOpenChallenge {
+    #[allow(dead_code)]
     fn completable(&self) -> bool {
         match &self.action {
             None => true,
@@ -919,10 +917,21 @@ struct PastGame {
     teams: Vec<TeamEntry>,
 }
 
-fn get_from_db<T, F, I, Cn>(connection: &Cn, id: I, on_success: F) -> EngineResponse
+fn add_into<T>(collection: &mut Vec<DBEntry<T>>, item: T) {
+    collection.push(DBEntry {
+        id: match collection.iter().max_by(|x, y| x.id.cmp(&y.id)) {
+            None => 1,
+            Some(max_item) => max_item.id + 1,
+        },
+        contents: item,
+    })
+}
+
+#[allow(dead_code)]
+fn get_from_db<T, F, I, Cn>(connection: &Cn, id: I, on_success: F) -> InternEngineResponse
 where
     T: SerializedCollection,
-    F: Fn(CollectionDocument<T>) -> EngineResponse,
+    F: Fn(CollectionDocument<T>) -> InternEngineResponse,
     I: KeyEncoding<T::PrimaryKey> + std::fmt::Display,
     Cn: Connection,
 {
@@ -938,18 +947,16 @@ where
                 id,
                 err
             );
-            EngineResponse {
-                response_action: ResponseAction::Error(commands::Error::InternalError),
-                broadcast_action: None,
-            }
+            ResponseAction::Error(commands::Error::InternalError).into()
         }
     }
 }
 
-fn get_all_from_db<T, F, Cn>(connection: &Cn, on_success: F) -> EngineResponse
+#[allow(dead_code)]
+fn get_all_from_db<T, F, Cn>(connection: &Cn, on_success: F) -> InternEngineResponse
 where
     T: SerializedCollection,
-    F: Fn(Vec<CollectionDocument<T>>) -> EngineResponse,
+    F: Fn(Vec<CollectionDocument<T>>) -> InternEngineResponse,
     Cn: Connection,
 {
     match T::all(connection).query() {
@@ -965,7 +972,8 @@ where
     }
 }
 
-fn update_in_db<T, Cn>(connection: &Cn, doc: CollectionDocument<T>) -> EngineResponse
+#[allow(dead_code)]
+fn update_in_db<T, Cn>(connection: &Cn, doc: CollectionDocument<T>) -> InternEngineResponse
 where
     T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
     Cn: Connection,
@@ -973,15 +981,16 @@ where
     update_in_db_and(connection, doc, || ResponseAction::Success.into())
 }
 
+#[allow(dead_code)]
 fn update_in_db_and<T, Cn, F>(
     connection: &Cn,
     mut doc: CollectionDocument<T>,
     on_success: F,
-) -> EngineResponse
+) -> InternEngineResponse
 where
     T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
     Cn: Connection,
-    F: Fn() -> EngineResponse,
+    F: Fn() -> InternEngineResponse,
 {
     match doc.update(connection) {
         Ok(_) => on_success(),
@@ -996,7 +1005,8 @@ where
     }
 }
 
-fn delete_from_db<T, Cn>(connection: &Cn, doc: CollectionDocument<T>) -> EngineResponse
+#[allow(dead_code)]
+fn delete_from_db<T, Cn>(connection: &Cn, doc: CollectionDocument<T>) -> InternEngineResponse
 where
     T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
     Cn: Connection,
@@ -1004,15 +1014,16 @@ where
     delete_from_db_and(connection, doc, || ResponseAction::Success.into())
 }
 
+#[allow(dead_code)]
 fn delete_from_db_and<T, Cn, F>(
     connection: &Cn,
     doc: CollectionDocument<T>,
     on_success: F,
-) -> EngineResponse
+) -> InternEngineResponse
 where
     T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
     Cn: Connection,
-    F: Fn() -> EngineResponse,
+    F: Fn() -> InternEngineResponse,
 {
     match doc.delete(connection) {
         Ok(_) => on_success(),
@@ -1027,11 +1038,12 @@ where
     }
 }
 
-fn add_to_db_and<T, Cn, F>(connection: &Cn, value: T, on_success: F) -> EngineResponse
+#[allow(dead_code)]
+fn add_to_db_and<T, Cn, F>(connection: &Cn, value: T, on_success: F) -> InternEngineResponse
 where
     T: SerializedCollection<Contents = T> + 'static,
     Cn: Connection,
-    F: Fn(CollectionDocument<T>) -> EngineResponse,
+    F: Fn(CollectionDocument<T>) -> InternEngineResponse,
 {
     match T::push(value, connection) {
         Err(err) => {
@@ -1046,7 +1058,8 @@ where
     }
 }
 
-fn add_to_db<T, Cn>(connection: &Cn, value: T) -> EngineResponse
+#[allow(dead_code)]
+fn add_to_db<T, Cn>(connection: &Cn, value: T) -> InternEngineResponse
 where
     T: SerializedCollection<Contents = T> + 'static,
     Cn: Connection,
@@ -1095,7 +1108,12 @@ impl Session {
         }
     }
 
-    fn vroom(&mut self, command: EngineAction, db: &Database, session_id: u64) -> EngineResponse {
+    fn vroom(
+        &mut self,
+        command: EngineAction,
+        session_id: u64,
+        player_entries: &[DBEntry<PlayerEntry>],
+    ) -> InternEngineResponsePackage {
         use commands::Error::*;
         use BroadcastAction::*;
         use EngineAction::*;
@@ -1108,10 +1126,7 @@ impl Session {
                     .iter()
                     .position(|t| t.players.iter().all(|&p| p == player))
                 {
-                    None => EngineResponse {
-                        response_action: ResponseAction::Error(commands::Error::NotFound),
-                        broadcast_action: None,
-                    },
+                    None => Error(NotFound).into(),
                     Some(team) => {
                         self.teams[team].locations.insert(
                             0,
@@ -1119,21 +1134,19 @@ impl Session {
                         );
                         println!("Engine: done with SendLocation");
                         EngineResponse {
-                            response_action: ResponseAction::Success,
-                            broadcast_action: Some(BroadcastAction::Location { team, location }),
+                            response_action: Success,
+                            broadcast_action: Some(Location { team, location }),
                         }
+                        .into()
                     }
                 }
             }
             AssignPlayerToTeam { player, team } => {
                 let mut old_team = None;
                 self.teams.iter_mut().enumerate().for_each(|(index, t)| {
-                    match t.players.iter().position(|p| p == &player) {
-                        Some(i) => {
-                            t.players.remove(i);
-                            old_team = Some(index)
-                        }
-                        None => (),
+                    if let Some(i) = t.players.iter().position(|p| p == &player) {
+                        t.players.remove(i);
+                        old_team = Some(index)
                     }
                 });
                 match team {
@@ -1149,6 +1162,7 @@ impl Session {
                                     to_team: team,
                                 }),
                             }
+                            .into()
                         }
                         None => Error(NotFound).into(),
                     },
@@ -1160,16 +1174,14 @@ impl Session {
                             from_team: old_team,
                             to_team: team,
                         }),
-                    },
+                    }
+                    .into(),
                 }
             }
             Catch {
                 catcher: _,
                 caught: _,
-            } => EngineResponse {
-                broadcast_action: None,
-                response_action: ResponseAction::Error(commands::Error::NotImplemented), // TODO:
-            },
+            } => Error(NotImplemented).into(), // TODO:
             Complete {
                 completer,
                 completed,
@@ -1180,21 +1192,16 @@ impl Session {
                 },
                 None => todo!(),
             },
-            GetState => EngineResponse {
-                broadcast_action: None,
-                response_action: ResponseAction::SendState {
-                    teams: self
-                        .teams
-                        .iter()
-                        .enumerate()
-                        .map(|(i, t)| t.to_sendable(db, i))
-                        .collect(),
-                    game: match &self.game {
-                        None => None,
-                        Some(game) => Some(game.to_sendable()),
-                    },
-                },
-            },
+            GetState => SendState {
+                teams: self
+                    .teams
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| t.to_sendable(player_entries, i))
+                    .collect(),
+                game: self.game.clone().map(|g| g.to_sendable()),
+            }
+            .into(),
             AddTeam {
                 name,
                 discord_channel,
@@ -1206,10 +1213,7 @@ impl Session {
                     .map(|t| t.name.clone())
                     .find(|n| strcmp(&n.to_lowercase(), &name.to_lowercase()) >= 0.85)
                 {
-                    EngineResponse {
-                        response_action: ResponseAction::Error(commands::Error::TeamExists(nom)),
-                        broadcast_action: None,
-                    }
+                    Error(TeamExists(nom)).into()
                 } else {
                     let colour = match colour {
                         Some(c) => c,
@@ -1218,8 +1222,7 @@ impl Session {
                                 .config()
                                 .team_colours
                                 .iter()
-                                .filter(|&&c| self.teams.iter().any(|t| t.colour == c))
-                                .next()
+                                .find(|&&c| self.teams.iter().any(|t| t.colour == c))
                             {
                                 Some(&colour) => colour,
                                 None => Colour { r: 0, g: 0, b: 0 },
@@ -1228,17 +1231,11 @@ impl Session {
                     };
                     self.teams
                         .push(TeamEntry::new(name, Vec::new(), discord_channel, colour));
-                    EngineResponse {
-                        response_action: ResponseAction::Success,
-                        broadcast_action: None,
-                    }
+                    Success.into()
                 }
             }
             Start => match self.game {
-                Some(_) => EngineResponse {
-                    response_action: ResponseAction::Error(commands::Error::GameInProgress),
-                    broadcast_action: None,
-                },
+                Some(_) => Error(GameInProgress).into(),
                 None => {
                     todo!(); // TODO:
                 }
@@ -1275,11 +1272,15 @@ struct DBEntry<T> {
     contents: T,
 }
 
+#[allow(dead_code)]
 pub struct Engine {
     db: Database,
+    changes_since_save: bool,
 
     sessions: Vec<DBEntry<Session>>,
     challenges: Vec<DBEntry<ChallengeEntry>>,
+    challenge_sets: Vec<DBEntry<ChallengeSetEntry>>,
+    zones: Vec<DBEntry<ZoneEntry>>,
     players: Vec<DBEntry<PlayerEntry>>,
 
     pictures: Vec<Header>,
@@ -1313,6 +1314,8 @@ impl Engine {
         }
 
         let challenges = make_entry_vector::<ChallengeEntry>(&db);
+        let challenge_sets = make_entry_vector::<ChallengeSetEntry>(&db);
+        let zones = make_entry_vector::<ZoneEntry>(&db);
         let sessions = make_entry_vector::<Session>(&db);
         let players = make_entry_vector::<PlayerEntry>(&db);
 
@@ -1321,7 +1324,10 @@ impl Engine {
 
         Engine {
             db,
+            changes_since_save: false,
             challenges,
+            challenge_sets,
+            zones,
             sessions,
             players,
             past_games,
@@ -1329,335 +1335,270 @@ impl Engine {
         }
     }
 
-    fn get_from_db<T, F, I>(&self, id: I, on_success: F) -> EngineResponse
+    #[allow(dead_code)]
+    fn get_from_db<T, F, I>(&self, id: I, on_success: F) -> InternEngineResponse
     where
         T: SerializedCollection,
-        F: Fn(CollectionDocument<T>) -> EngineResponse,
+        F: Fn(CollectionDocument<T>) -> InternEngineResponse,
         I: KeyEncoding<T::PrimaryKey> + std::fmt::Display,
     {
         get_from_db::<T, _, _, _>(&self.db, id, on_success)
     }
 
-    fn update_in_db<T>(&self, doc: CollectionDocument<T>) -> EngineResponse
+    #[allow(dead_code)]
+    fn update_in_db<T>(&self, doc: CollectionDocument<T>) -> InternEngineResponse
     where
         T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
     {
         update_in_db(&self.db, doc)
     }
 
-    fn update_in_db_and<T, F>(&self, doc: CollectionDocument<T>, on_success: F) -> EngineResponse
+    #[allow(dead_code)]
+    fn update_in_db_and<T, F>(
+        &self,
+        doc: CollectionDocument<T>,
+        on_success: F,
+    ) -> InternEngineResponse
     where
         T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
-        F: Fn() -> EngineResponse,
+        F: Fn() -> InternEngineResponse,
     {
         update_in_db_and(&self.db, doc, on_success)
     }
 
-    fn delete_from_db<T>(&self, doc: CollectionDocument<T>) -> EngineResponse
+    #[allow(dead_code)]
+    fn delete_from_db<T>(&self, doc: CollectionDocument<T>) -> InternEngineResponse
     where
         T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
     {
         delete_from_db(&self.db, doc)
     }
 
-    fn delete_from_db_and<T, F>(&self, doc: CollectionDocument<T>, on_success: F) -> EngineResponse
+    #[allow(dead_code)]
+    fn delete_from_db_and<T, F>(
+        &self,
+        doc: CollectionDocument<T>,
+        on_success: F,
+    ) -> InternEngineResponse
     where
         T: DefaultSerialization + for<'de> Deserialize<'de> + Serialize,
-        F: Fn() -> EngineResponse,
+        F: Fn() -> InternEngineResponse,
     {
         delete_from_db_and(&self.db, doc, on_success)
     }
 
-    pub fn vroom(&mut self, command: EngineCommand) -> InternEngineResponse {
+    pub fn vroom(&mut self, command: InternEngineCommand) -> InternEngineResponsePackage {
         use commands::Error::*;
         use BroadcastAction::*;
         use EngineAction::*;
         use ResponseAction::*;
-        InternEngineResponse::DirectResponse(match command.session {
-            Some(id) => match Session::get(&id, &self.db) {
-                Err(err) => {
-                    eprintln!("Couldn't retrieve session from db: {}", err);
-                    EngineResponse {
-                        response_action: ResponseAction::Error(commands::Error::InternalError),
-                        broadcast_action: None,
+        match command {
+            InternEngineCommand::Command(command) => {
+                self.changes_since_save = true;
+                match command.session {
+                    Some(id) => match self.sessions.iter_mut().find(|s| s.id == id) {
+                        Some(session) => session.contents.vroom(command.action, id, &self.players),
+                        None => Error(NotFound).into()
                     }
-                }
-                Ok(maybedoc) => match maybedoc {
-                    None => EngineResponse {
-                        response_action: ResponseAction::Error(commands::Error::NotFound),
-                        broadcast_action: None,
-                    },
-                    Some(mut doc) => {
-                        let response = doc.contents.vroom(command.action, &self.db, doc.header.id);
-                        match doc.update(&self.db) {
-                            Ok(_) => response,
-                            Err(err) => {
-                                eprintln!(
-                                    "Couldn't update team in db after processing command: {}",
-                                    err
-                                );
-                                ResponseAction::Error(commands::Error::InternalError).into()
-                            }
-                        }
-                    }
-                },
-            },
-            None => match command.action {
-                GetRawChallenges => get_all_from_db::<ChallengeEntry, _, _>(&self.db, |entries| {
-                    SendRawChallenges(
-                        entries
-                            .iter()
-                            .filter_map(|entry| {
-                                entry.contents.to_sendable(entry.header.id, &self.db).ok()
-                            })
-                            .collect(),
-                    )
-                    .into()
-                }),
-                SetRawChallenge(challenge) => match challenge.id {
-                    Some(id) => {
-                        self.get_from_db::<ChallengeEntry, _, _>(id, |mut doc| {
-                            doc.contents = challenge.clone().into();
-                            self.update_in_db(doc)
-                        })
-                    }
-                    None => {
-                        Error(commands::Error::BadData(
-                            "the supplied challenge doesn't have an id. this can happen because the RawChallenge::new() method doesn't assign an id. challenges sent from truinlag have an id."
-                            .into()))
-                        .into()
-                    }
-                },
-                AddRawChallenge(challenge) => {
-                    let entry: ChallengeEntry = challenge.clone().into();
-                    add_to_db(&self.db, entry)
-                }
-                GetPlayerByPassphrase(passphrase) => {
-                    println!("Engine: getting player by passphrase {}", passphrase);
-                    let doc = self
-                        .db
-                        .view::<PlayersByPassphrase>()
-                        .with_key(&passphrase)
-                        .query_with_collection_docs()
-                        .expect("Couldn't query db while getting player by passphrase");
-                    match doc.len() {
-                        0 => {
-                            println!("Engine: no player found, returning not found error");
-                            EngineResponse {
-                                response_action: ResponseAction::Error(commands::Error::NotFound),
-                                broadcast_action: None,
-                            }
-                        }
-                        1 => {
-                            let document = doc.get(0).expect("Document should always have a first entry, since it has a length of 1").document;
-                            EngineResponse {
-                                response_action: ResponseAction::Player(
-                                    document.contents.to_sendable(document.header.id),
-                                ),
-                                broadcast_action: None,
-                            }
-                        }
-                        _ => {
-                            eprintln!(
-                                "Engine: Multiple players seem to have passphrase {}",
-                                passphrase
-                            );
-                            EngineResponse {
-                                response_action: ResponseAction::Error(
-                                    commands::Error::AmbiguousData,
-                                ),
-                                broadcast_action: None,
-                            }
-                        }
-                    }
-                }
-                AddSession { name, mode } => match Session::all(&self.db).query() {
-                    Err(err) => {
-                        println!("Engine: Couldn't retreive all sessions from db: {}", err);
-                        ResponseAction::Error(commands::Error::InternalError).into()
-                    }
-                    Ok(sessions) => {
-                        if let Some(_) = sessions
-                            .iter()
-                            .map(|s| &s.contents.name)
-                            .find(|s| s == &&name)
-                        {
-                            ResponseAction::Error(commands::Error::AlreadyExists).into()
-                        } else {
-                            match Session::new(name, mode).push_into(&self.db) {
-                                Err(err) => {
-                                    println!("Couldn't push session into db: {}", err);
-                                    ResponseAction::Error(commands::Error::InternalError).into()
+                    None => match command.action {
+                        GetRawChallenges => SendRawChallenges(self.challenges.iter().filter_map(|c| c.contents.to_sendable(c.id, &self.challenge_sets, &self.zones).ok()).collect()).into(),
+                        SetRawChallenge(challenge) => match challenge.id {
+                            Some(id) => {
+                                match self.challenges.iter_mut().find(|c| c.id == id) {
+                                    None => Error(NotFound).into(),
+                                    Some(c) => {
+                                        c.contents = challenge.clone().into();
+                                        Success.into()
+                                    }
                                 }
-                                Ok(_) => ResponseAction::Success.into(),
+                            }
+                            None => {
+                                Error(BadData(
+                                    "the supplied challenge doesn't have an id. this can happen because the RawChallenge::new() method doesn't assign an id. challenges sent from truinlag have an id."
+                                    .into()))
+                                .into()
+                            }
+                        },
+                        AddRawChallenge(challenge) => {
+                            let entry: ChallengeEntry = challenge.clone().into();
+                            add_into(&mut self.challenges, entry);
+                            Success.into()
+                        }
+                        GetPlayerByPassphrase(passphrase) => {
+                            println!("Engine: getting player by passphrase {}", passphrase);
+                            let doc = self
+                                .players
+                                .iter()
+                                .filter(|p| p.contents.passphrase == passphrase);
+                            match doc.count() {
+                                0 => {
+                                    Error(NotFound).into()
+                                }
+                                1 => {
+                                    let document = self
+                                        .players
+                                        .iter()
+                                        .find(|p| p.contents.passphrase == passphrase)
+                                        .expect("should always exist, I just checked for that");
+                                    Player(document.contents.to_sendable(document.id)).into()
+                                }
+                                _ => {
+                                    eprintln!(
+                                        "Engine: Multiple players seem to have passphrase {}",
+                                        passphrase
+                                    );
+                                    Error(AmbiguousData).into()
+                                }
                             }
                         }
-                    }
-                },
-                AddPlayer {
-                    name,
-                    discord_id,
-                    passphrase,
-                    session,
-                } => match PlayerEntry::all(&self.db).query() {
-                    Err(err) => {
-                        println!("Engine: Couldn't retreive all players from db: {}", err);
-                        EngineResponse {
-                            response_action: ResponseAction::Error(commands::Error::InternalError),
-                            broadcast_action: None,
-                        }
-                    }
-                    Ok(players) => {
-                        if let Some(_) = players
-                            .iter()
-                            .map(|p| &p.contents.passphrase)
-                            .find(|&pp| pp == &passphrase)
-                        {
-                            EngineResponse {
-                                response_action: ResponseAction::Error(
-                                    commands::Error::AlreadyExists,
-                                ),
-                                broadcast_action: None,
-                            }
-                        } else {
-                            match (PlayerEntry {
-                                name,
-                                discord_id,
-                                passphrase,
-                                session,
-                            })
-                            .push_into(&self.db)
+                        AddSession { name, mode } => {
+                                if self.sessions
+                                    .iter()
+                                    .any(|s| s.contents.name == name)
+                                {
+                                    ResponseAction::Error(commands::Error::AlreadyExists).into()
+                                } else {
+                                    add_into(&mut self.sessions, Session::new(name, mode));
+                                    Success.into()
+                                }
+                        },
+                        AddPlayer {
+                            name,
+                            discord_id,
+                            passphrase,
+                            session,
+                        } => {
+                            if self.players
+                                .iter()
+                                .any(|p| p.contents.passphrase == passphrase)
                             {
-                                Err(err) => {
-                                    println!("Engine: Couldn't add player to db: {}", err);
-                                    EngineResponse {
-                                        response_action: ResponseAction::Error(
-                                            commands::Error::InternalError,
-                                        ),
-                                        broadcast_action: None,
+                                Error(AlreadyExists).into()
+                            } else {
+                                add_into(
+                                    &mut self.players,
+                                    PlayerEntry {
+                                        name,
+                                        discord_id,
+                                        passphrase,
+                                        session,
+                                    }
+                                );
+                                Success.into()
+                            }
+                        },
+                        SetPlayerSession { player, session } => {
+                            match self.players.iter_mut().find(|p| p.id == player) {
+                                None => Error(NotFound).into(),
+                                Some(i_player) => {
+                                    let old_session = i_player.contents.session;
+                                    if old_session == session {
+                                        Success.into()
+                                    } else {
+                                        if let Some(tbr_session) = old_session {
+                                            match self.sessions.iter_mut().find(|s| s.id == tbr_session) {
+                                                None => {
+                                                    println!("Engine: couldn't find session with id {} of player {}", tbr_session, i_player.id)
+                                                }
+                                                Some(tbr_session) => {
+                                                    for team in &mut tbr_session.contents.teams {
+                                                        team.players.retain(|p| p != &i_player.id);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        match session {
+                                            None => {
+                                                i_player.contents.session = None;
+                                                EngineResponse {
+                                                    response_action: Success,
+                                                    broadcast_action: Some(PlayerChangedSession {
+                                                        player: i_player.contents.to_sendable(i_player.id),
+                                                        from_session: old_session,
+                                                        to_session: session,
+                                                    })
+                                                }.into()
+                                            }
+                                            Some(session) => {
+                                                if self.sessions.iter().any(|s| s.id == session) {
+                                                    i_player.contents.session = Some(session);
+                                                    EngineResponse {
+                                                        response_action: Success,
+                                                        broadcast_action: Some(PlayerChangedSession {
+                                                            player: i_player.contents.to_sendable(i_player.id),
+                                                            from_session: old_session,
+                                                            to_session: Some(session),
+                                                        })
+                                                    }.into()
+                                                } else {
+                                                    Error(NotFound).into()
+                                                }
+                                            }
+                                        }
                                     }
                                 }
-                                Ok(doc) => EngineResponse {
-                                    response_action: ResponseAction::Player(
-                                        doc.contents.to_sendable(doc.header.id),
-                                    ),
-                                    broadcast_action: None,
-                                },
                             }
                         }
-                    }
-                },
-                SetPlayerSession { player, session } => {
-                    self.get_from_db::<PlayerEntry, _, _>(player, |mut doc| {
-                        if let Some(s) = session {
-                            match Session::get(&s, &self.db) {
-                                Err(err) => {
-                                    eprintln!("Couldn't get Session from db: {}", err);
-                                    return ResponseAction::Error(commands::Error::InternalError)
-                                        .into();
+                        SetPlayerName { player, name } => {
+                            match self.players.iter_mut().find(|p| p.id == player) {
+                                None => Error(NotFound).into(),
+                                Some(player) => {
+                                    player.contents.name = name;
+                                    Success.into()
                                 }
-                                Ok(doc) => match doc {
-                                    Some(_) => (),
-                                    None => {
-                                        return ResponseAction::Error(commands::Error::NotFound)
-                                            .into()
-                                    }
-                                },
                             }
                         }
-                        let old_session = doc.contents.session;
-                        doc.contents.session = session;
-                        if let Some(old_session) = old_session {
-                            self.get_from_db::<Session, _, _>(old_session, |mut session_doc| {
-                                session_doc
-                                    .contents
-                                    .teams
-                                    .iter_mut()
-                                    .for_each(|t| t.players.retain(|p| p != &player));
-                                self.update_in_db(session_doc)
-                            });
+                        SetPlayerPassphrase { player, passphrase } => {
+                            match self.players.iter_mut().find(|p| p.id == player) {
+                                None => Error(NotFound).into(),
+                                Some(player) => {
+                                    player.contents.passphrase = passphrase;
+                                    Success.into()
+                                }
+                            }
                         }
-                        self.update_in_db_and(doc.clone(), || EngineResponse {
+                        RemovePlayer { player } => {
+                            // Note that this doesn't actually remove the player from the db, it just
+                            // removes all references to them from all sessions.
+                            match self.players.iter().find(|p| p.id == player) {
+                                None => Error(NotFound).into(),
+                                Some(_) => {
+                                    self.sessions.iter_mut().for_each(|s| s.contents.teams.iter_mut().for_each(|t| t.players.retain(|p| p != &player)));
+                                    Success.into()
+                                }
+                            }
+                        }
+                        Ping(payload) => EngineResponse {
                             response_action: Success,
-                            broadcast_action: Some(PlayerChangedSession {
-                                player: doc.contents.to_sendable(doc.header.id),
-                                from_session: old_session,
-                                to_session: session,
-                            }),
-                        })
-                    })
-                }
-                SetPlayerName { player, name } => {
-                    self.get_from_db::<PlayerEntry, _, _>(player, |mut doc| {
-                        doc.contents.name = name.clone();
-                        self.update_in_db(doc)
-                    })
-                }
-                SetPlayerPassphrase { player, passphrase } => self
-                    .get_from_db::<PlayerEntry, _, _>(player, |mut doc| {
-                        doc.contents.passphrase = passphrase.clone();
-                        self.update_in_db(doc)
-                    }),
-                RemovePlayer { player } => self.get_from_db::<PlayerEntry, _, _>(player, |doc| {
-                    if let Some(session) = doc.contents.session {
-                        self.get_from_db::<Session, _, _>(session, |mut session_doc| {
-                            session_doc
-                                .contents
-                                .teams
-                                .iter_mut()
-                                .for_each(|t| t.players.retain(|p| p != &player));
-                            self.update_in_db(session_doc)
-                        });
-                    }
-                    self.delete_from_db_and(doc.clone(), || EngineResponse {
-                        response_action: Success,
-                        broadcast_action: Some(PlayerDeleted(
-                            doc.contents.to_sendable(doc.header.id),
-                        )),
-                    })
-                }),
-                Ping(payload) => EngineResponse {
-                    response_action: Success,
-                    broadcast_action: Some(BroadcastAction::Pinged(payload)),
-                },
-                GetState => get_all_from_db::<Session, _, _>(&self.db, |docs| {
-                    let sessions: Vec<GameSession> = docs
-                        .iter()
-                        .map(|doc| doc.contents.to_sendable(doc.header.id))
-                        .collect();
-                    get_all_from_db::<PlayerEntry, _, _>(&self.db, move |docs| {
-                        let players = docs
-                            .iter()
-                            .map(|doc| doc.contents.to_sendable(doc.header.id))
-                            .collect();
-                        ResponseAction::SendGlobalState {
-                            sessions: sessions.clone(),
-                            players,
+                            broadcast_action: Some(BroadcastAction::Pinged(payload)),
+                        }.into(),
+                        GetState => {
+                            let sessions = self.sessions.iter().map(|s| s.contents.to_sendable(s.id)).collect();
+                            let players = self.players.iter().map(|p| p.contents.to_sendable(p.id)).collect();
+                            SendGlobalState { sessions, players }.into()
                         }
-                        .into()
-                    })
-                }),
-                Start => Error(NoSessionSupplied).into(),
-                Stop => Error(NoSessionSupplied).into(),
-                Catch {
-                    catcher: _,
-                    caught: _,
-                } => Error(NoSessionSupplied).into(),
-                Complete {
-                    completer: _,
-                    completed: _,
-                } => Error(NoSessionSupplied).into(),
-                SendLocation {
-                    player: _,
-                    location: _,
-                } => Error(NoSessionSupplied).into(),
-                AddTeam {
-                    name: _,
-                    discord_channel: _,
-                    colour: _,
-                } => Error(NoSessionSupplied).into(),
-                AssignPlayerToTeam { player: _, team: _ } => Error(NoSessionSupplied).into(),
-            },
-        })
+                        Start => Error(NoSessionSupplied).into(),
+                        Stop => Error(NoSessionSupplied).into(),
+                        Catch {
+                            catcher: _,
+                            caught: _,
+                        } => Error(NoSessionSupplied).into(),
+                        Complete {
+                            completer: _,
+                            completed: _,
+                        } => Error(NoSessionSupplied).into(),
+                        SendLocation {
+                            player: _,
+                            location: _,
+                        } => Error(NoSessionSupplied).into(),
+                        AddTeam {
+                            name: _,
+                            discord_channel: _,
+                            colour: _,
+                        } => Error(NoSessionSupplied).into(),
+                        AssignPlayerToTeam { player: _, team: _ } => Error(NoSessionSupplied).into(),
+                    },
+                }
+            }
+        }
     }
 }
