@@ -766,6 +766,7 @@ impl TeamEntry {
 
     pub fn to_sendable(&self, db: &Database, index: usize) -> truinlag::Team {
         truinlag::Team {
+            colour: self.colour,
             role: self.role,
             name: self.name.clone(),
             id: index,

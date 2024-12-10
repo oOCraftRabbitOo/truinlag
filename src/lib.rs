@@ -150,6 +150,7 @@ pub struct Team {
     pub role: TeamRole,
     pub name: String,
     pub id: usize,
+    pub colour: Colour,
     pub bounty: u64,
     pub points: u64,
     pub players: Vec<Player>,
