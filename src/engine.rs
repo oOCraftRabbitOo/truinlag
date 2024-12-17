@@ -1157,8 +1157,11 @@ impl Session {
                         team.role = TeamRole::Catcher;
                         EngineResponse {
                             response_action: Success,
-                            broadcast_action: Some(TeamMadeCatcher(team.to_sendable(db, id))),
+                            broadcast_action: Some(TeamMadeCatcher(
+                                team.to_sendable(player_entries, id),
+                            )),
                         }
+                        .into()
                     }
                 },
             },
@@ -1170,8 +1173,11 @@ impl Session {
                         team.role = TeamRole::Runner;
                         EngineResponse {
                             response_action: Success,
-                            broadcast_action: Some(TeamMadeRunner(team.to_sendable(db, id))),
+                            broadcast_action: Some(TeamMadeRunner(
+                                team.to_sendable(player_entries, id),
+                            )),
                         }
+                        .into()
                     }
                 },
             },
