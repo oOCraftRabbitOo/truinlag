@@ -1691,6 +1691,10 @@ impl Engine {
                             colour: _,
                         } => Error(NoSessionSupplied).into(),
                         AssignPlayerToTeam { player: _, team: _ } => Error(NoSessionSupplied).into(),
+                        MakeTeamRunner(_) => Error(NoSessionSupplied).into(),
+                        MakeTeamCatcher(_) => Error(NoSessionSupplied).into(),
+                        AddChallengeToTeam { team: _, challenge: _ } => Error(NoSessionSupplied).into(),
+                        RenameTeam { team: _, new_name: _ } => Error(NoSessionSupplied).into(),
                     },
                 }
             }
