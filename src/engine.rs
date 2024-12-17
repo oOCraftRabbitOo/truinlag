@@ -1,4 +1,6 @@
-use super::runtime::{InternEngineCommand, InternEngineResponse, InternEngineResponsePackage};
+use super::runtime::{
+    InternEngineCommand, InternEngineResponse, InternEngineResponsePackage, RuntimeRequest,
+};
 use bonsaidb::{
     core::{
         connection::{Connection, StorageConnection},
@@ -8,6 +10,8 @@ use bonsaidb::{
             Collection, CollectionMapReduce, DefaultSerialization, ReduceResult, Schema,
             SerializedCollection, View, ViewMapResult, ViewMappedValue, ViewSchema,
         },
+        transaction::Transaction,
+        transmog_pot,
     },
     local::{
         config::{self, Builder},
@@ -22,6 +26,7 @@ use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path};
 use strsim::normalized_damerau_levenshtein as strcmp;
+use tokio::time::{sleep, Duration};
 use truinlag::{
     commands::{BroadcastAction, EngineAction, EngineResponse, ResponseAction},
     *,
@@ -917,7 +922,10 @@ struct PastGame {
     teams: Vec<TeamEntry>,
 }
 
-fn add_into<T>(collection: &mut Vec<DBEntry<T>>, item: T) {
+fn add_into<T>(collection: &mut Vec<DBEntry<T>>, item: T)
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+{
     collection.push(DBEntry {
         id: match collection.iter().max_by(|x, y| x.id.cmp(&y.id)) {
             None => 1,
@@ -1120,7 +1128,7 @@ impl Session {
         use ResponseAction::*;
         match command {
             SendLocation { player, location } => {
-                println!("Engine: received SendLocation");
+                //println!("Engine: received SendLocation");
                 match self
                     .teams
                     .iter()
@@ -1132,7 +1140,7 @@ impl Session {
                             0,
                             (location.0, location.1, chrono::offset::Local::now().time()),
                         );
-                        println!("Engine: done with SendLocation");
+                        //println!("Engine: done with SendLocation");
                         EngineResponse {
                             response_action: Success,
                             broadcast_action: Some(Location { team, location }),
@@ -1267,9 +1275,30 @@ impl Session {
     }
 }
 
-struct DBEntry<T> {
+#[derive(Clone, Debug)]
+struct DBEntry<T>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+{
     id: u64,
     contents: T,
+}
+
+impl<T> DBEntry<T>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+{
+    fn make_entry_vector(db: &Database) -> Vec<Self> {
+        T::all(db)
+            .query()
+            .unwrap()
+            .into_iter()
+            .map(|d| DBEntry {
+                id: d.header.id,
+                contents: d.contents,
+            })
+            .collect()
+    }
 }
 
 #[allow(dead_code)]
@@ -1332,6 +1361,16 @@ impl Engine {
             players,
             past_games,
             pictures,
+        }
+    }
+
+    pub fn setup(&self) -> InternEngineResponsePackage {
+        InternEngineResponsePackage {
+            response: InternEngineResponse::DirectResponse(ResponseAction::Success.into()),
+            runtime_requests: Some(vec![RuntimeRequest::CreateTimer {
+                duration: tokio::time::Duration::from_secs(10),
+                payload: InternEngineCommand::AutoSave,
+            }]),
         }
     }
 
@@ -1425,7 +1464,7 @@ impl Engine {
                             Success.into()
                         }
                         GetPlayerByPassphrase(passphrase) => {
-                            println!("Engine: getting player by passphrase {}", passphrase);
+                            //println!("Engine: getting player by passphrase {}", passphrase);
                             let doc = self
                                 .players
                                 .iter()
@@ -1558,10 +1597,12 @@ impl Engine {
                         }
                         RemovePlayer { player } => {
                             // Note that this doesn't actually remove the player from the db, it just
-                            // removes all references to them from all sessions.
-                            match self.players.iter().find(|p| p.id == player) {
+                            // removes all references to them from all sessions and removes their
+                            // passphrase.
+                            match self.players.iter_mut().find(|p| p.id == player) {
                                 None => Error(NotFound).into(),
-                                Some(_) => {
+                                Some(p) => {
+                                    p.contents.passphrase = "".into();
                                     self.sessions.iter_mut().for_each(|s| s.contents.teams.iter_mut().for_each(|t| t.players.retain(|p| p != &player)));
                                     Success.into()
                                 }
@@ -1597,6 +1638,81 @@ impl Engine {
                         } => Error(NoSessionSupplied).into(),
                         AssignPlayerToTeam { player: _, team: _ } => Error(NoSessionSupplied).into(),
                     },
+                }
+            }
+            InternEngineCommand::AutoSave => {
+                fn vec_overwrite_in_transaction<T>(
+                    entries: Vec<DBEntry<T>>,
+                    transaction: &mut Transaction,
+                ) -> Result<(), bonsaidb::core::Error>
+                where
+                    T: SerializedCollection<Contents = T, PrimaryKey = u64> + 'static,
+                {
+                    let mut ret = Ok(());
+                    for entry in entries {
+                        match entry
+                            .contents
+                            .overwrite_in_transaction(&entry.id, transaction)
+                        {
+                            Ok(()) => (),
+                            Err(err) => {
+                                println!(
+                                    "Engine: something went wrong during overwrite_in_transaction: {}",
+                                    err
+                                );
+                                ret = Err(err);
+                            }
+                        }
+                    }
+                    ret
+                }
+                if self.changes_since_save {
+                    let players = self.players.clone();
+                    let db = self.db.clone();
+                    let sessions = self.sessions.clone();
+                    let challenges = self.challenges.clone();
+                    let challenge_sets = self.challenge_sets.clone();
+                    let zones = self.zones.clone();
+                    self.changes_since_save = false;
+
+                    InternEngineResponsePackage {
+                        response: Success.into(),
+                        runtime_requests: Some(vec![RuntimeRequest::RawLoopback(tokio::spawn(
+                            async move {
+                                println!("Engine Autosave: starting autosave");
+                                let now = tokio::time::Instant::now();
+                                let mut transaction = Transaction::new();
+                                let _ = vec_overwrite_in_transaction(players, &mut transaction);
+                                let _ = vec_overwrite_in_transaction(sessions, &mut transaction);
+                                let _ = vec_overwrite_in_transaction(challenges, &mut transaction);
+                                let _ =
+                                    vec_overwrite_in_transaction(challenge_sets, &mut transaction);
+                                let _ = vec_overwrite_in_transaction(zones, &mut transaction);
+
+                                match transaction.apply(&db) {
+                                    Ok(yay) => println!(
+                                        "Engine Autosave: autosave succeeded in {} ms: {:?}",
+                                        now.elapsed().as_millis(),
+                                        yay
+                                    ),
+                                    Err(err) => {
+                                        eprintln!("Engine Autosave: AUTOSAVE FAILED HIGH ALERT YOU ARE ALL FUCKED NOW (in {} ms): {}", now.elapsed().as_millis(), err);
+                                        panic!("autosave failed")
+                                    }
+                                }
+
+                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                InternEngineCommand::AutoSave
+                            },
+                        ))]),
+                    }
+                } else {
+                    println!("Engine: Autosave requested, but no changes since last save");
+                    RuntimeRequest::CreateTimer {
+                        duration: Duration::from_secs(10),
+                        payload: InternEngineCommand::AutoSave,
+                    }
+                    .into()
                 }
             }
         }

@@ -3,7 +3,6 @@ use crate::{
     error::{self, Result},
 };
 use async_broadcast as broadcast;
-use bonsaidb::core::connection::Database;
 use chrono;
 use std::{future::Future, marker::Unpin, path::Path};
 use tokio::{
@@ -44,8 +43,8 @@ pub enum RuntimeRequest {
 }
 
 pub struct InternEngineResponsePackage {
-    response: InternEngineResponse,
-    runtime_requests: Option<Vec<RuntimeRequest>>,
+    pub response: InternEngineResponse,
+    pub runtime_requests: Option<Vec<RuntimeRequest>>,
 }
 
 #[derive(Debug)]
@@ -58,6 +57,7 @@ pub enum InternEngineResponse {
 #[derive(Debug)]
 pub enum InternEngineCommand {
     Command(EngineCommand),
+    AutoSave,
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +102,15 @@ impl From<InternEngineResponse> for InternEngineResponsePackage {
         InternEngineResponsePackage {
             response: value,
             runtime_requests: None,
+        }
+    }
+}
+
+impl From<RuntimeRequest> for InternEngineResponsePackage {
+    fn from(value: RuntimeRequest) -> Self {
+        InternEngineResponsePackage {
+            response: ResponseAction::Success.into(),
+            runtime_requests: Some(vec![value]),
         }
     }
 }
@@ -271,6 +280,52 @@ async fn engine(
 ) -> Result<()> {
     const SEND_ERROR: &str =
         "Engine: The broadcast channel should never be closed because of `_broadcast_rx_staller`";
+    async fn handle_runtime_requests(
+        requests: Option<Vec<RuntimeRequest>>,
+        mpsc_sender: &mpsc::Sender<EngineSignal>,
+    ) {
+        if let Some(requests) = requests {
+            for request in requests {
+                match request {
+                    RuntimeRequest::CreateTimer { duration, payload } => {
+                        let sender = mpsc_sender.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(duration).await;
+                            sender
+                                .send(EngineSignal::RawLoopbackCommand(payload))
+                                .await
+                                .unwrap()
+                        });
+                    }
+                    RuntimeRequest::CreateAlarm { time, payload } => {
+                        let sender = mpsc_sender.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(
+                                (time - chrono::offset::Local::now().time())
+                                    .abs()
+                                    .to_std()
+                                    .unwrap(),
+                            )
+                            .await;
+                            sender
+                                .send(EngineSignal::RawLoopbackCommand(payload))
+                                .await
+                                .unwrap()
+                        });
+                    }
+                    RuntimeRequest::RawLoopback(handle) => {
+                        let sender = mpsc_sender.clone();
+                        tokio::spawn(async move {
+                            sender
+                                .send(EngineSignal::RawLoopbackCommand(handle.await.unwrap()))
+                                .await
+                                .unwrap();
+                        });
+                    }
+                }
+            }
+        }
+    }
     async fn handle_intern_response(
         response: InternEngineResponsePackage,
         broadcast_handle: &broadcast::Sender<IOSignal>,
@@ -278,27 +333,8 @@ async fn engine(
         mpsc_sender: mpsc::Sender<EngineSignal>,
         id: u64,
     ) {
-        if let Some(requests) = response.runtime_requests {
-            for request in requests {
-                match request {
-                    RuntimeRequest::CreateTimer { duration, payload } => {
-                        mpsc_sender = mpsc_sender.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(duration.into()).await;
-                            mpsc_sender
-                                .send(EngineSignal::RawLoopbackCommand(payload))
-                                .await
-                                .unwrap()
-                        });
-                    }
-                    RuntimeRequest::CreateAlarm { time, payload } => {
-                        mpsc_sender = mpsc_sender.clone();
-                        tokio::spawn(async move {})
-                    }
-                }
-            }
-        }
-        match response {
+        handle_runtime_requests(response.runtime_requests, &mpsc_sender).await;
+        match response.response {
             InternEngineResponse::DirectResponse(response) => {
                 if let Some(action) = response.broadcast_action {
                     let message = IOSignal::Command(ClientCommand::Broadcast(action));
@@ -332,6 +368,7 @@ async fn engine(
         }
     }
     let mut engine = engine::Engine::init(Path::new("truintabase"));
+    handle_runtime_requests(engine.setup().runtime_requests, &mpsc_sender).await;
     loop {
         match mpsc_handle
             .recv()
@@ -375,6 +412,9 @@ async fn engine(
             EngineSignal::Shutdown => {
                 println!("Engine: shutdown signal received");
                 break;
+            }
+            EngineSignal::RawLoopbackCommand(command) => {
+                handle_runtime_requests(engine.vroom(command).runtime_requests, &mpsc_sender).await;
             }
         };
     }
@@ -426,7 +466,7 @@ async fn io(
                 IOSignal::Command(command) => {
                     let serialized = bincode::serialize(&command)?;
                     transport.send(Bytes::from(serialized)).await?;
-                    println!("IO {:?}: sent thing to client", addr)
+                    //println!("IO {:?}: sent thing to client", addr)
                 }
             };
         }
@@ -455,7 +495,7 @@ async fn io(
                     .await?,
             )
             .await?;
-            println!("IO {:?}: forwarded response", addr);
+            //println!("IO {:?}: forwarded response", addr);
         }
     }
 
@@ -469,7 +509,7 @@ async fn io(
         let mut count: u64 = 0;
 
         while let Some(message) = transport.next().await {
-            println!("IO {:?}: ({}) received message from client", addr, count);
+            //println!("IO {:?}: ({}) received message from client", addr, count);
             match message {
                 Ok(val) => {
                     let (oneshot_send, oneshot_recv) = oneshot::channel();
@@ -479,9 +519,9 @@ async fn io(
                         channel: oneshot_send,
                     })
                     .await?;
-                    println!("IO {:?}: ({}) forwarded message", addr, count);
+                    //println!("IO {:?}: ({}) forwarded message", addr, count);
                     recv_tx.send(oneshot_recv).await?;
-                    println!("IO {:?}: ({}) sent oneshot_recv", addr, count);
+                    //println!("IO {:?}: ({}) sent oneshot_recv", addr, count);
                 }
                 Err(err) => return Err(err.into()),
             }
