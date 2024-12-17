@@ -1284,7 +1284,7 @@ impl Session {
                                 .config()
                                 .team_colours
                                 .iter()
-                                .find(|&&c| self.teams.iter().any(|t| t.colour == c))
+                                .find(|&&c| !self.teams.iter().any(|t| t.colour == c))
                             {
                                 Some(&colour) => colour,
                                 None => Colour { r: 0, g: 0, b: 0 },
