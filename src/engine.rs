@@ -2046,6 +2046,8 @@ impl Session {
             GetRawChallenges => Error(SessionSupplied).into(),
             SetRawChallenge(_) => Error(SessionSupplied).into(),
             AddRawChallenge(_) => Error(SessionSupplied).into(),
+            AddChallengeSet(_) => Error(SessionSupplied).into(),
+            GetChallengeSets => Error(SessionSupplied).into(),
         }
     }
 }
@@ -2400,9 +2402,21 @@ impl Engine {
                         GenerateTeamChallenges(_) => Error(NoSessionSupplied).into(),
                         AddChallengeToTeam { team: _, challenge: _ } => Error(NoSessionSupplied).into(),
                         RenameTeam { team: _, new_name: _ } => Error(NoSessionSupplied).into(),
+                        AddChallengeSet(name) => {
+                            if self.challenge_sets.iter().any(|s| s.contents.name == name) {
+                                Error(AlreadyExists).into()
+                            } else {
+                                add_into(&mut self.challenge_sets, ChallengeSetEntry { name });
+                                Success.into()
+                            }
+                        }
+                        GetChallengeSets => {
+                            SendChallengeSets(self.challenge_sets.iter().map(|s| s.contents.to_sendable(s.id)).collect()).into()
+                        }
                     },
                 }
             }
+
             InternEngineCommand::AutoSave => {
                 fn vec_overwrite_in_transaction<T>(
                     entries: Vec<DBEntry<T>>,

@@ -107,6 +107,8 @@ pub enum EngineAction {
         new_name: String,
     },
     GenerateTeamChallenges(usize),
+    AddChallengeSet(String),
+    GetChallengeSets,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -124,6 +126,7 @@ pub enum ResponseAction {
         players: Vec<Player>,
     },
     Success,
+    SendChallengeSets(Vec<ChallengeSet>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

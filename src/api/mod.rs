@@ -1,6 +1,6 @@
 use crate::commands::{
-    BroadcastAction, ClientCommand, EngineAction, EngineCommand, EngineCommandPackage,
-    ResponseAction, ResponsePackage,
+    BroadcastAction, ClientCommand, EngineAction, EngineAction::*, EngineCommand,
+    EngineCommandPackage, ResponseAction, ResponsePackage,
 };
 use crate::*;
 use bytes::Bytes;
@@ -266,6 +266,34 @@ impl SendConnection {
             _ => Err(Error::InvalidSignal),
         }
     }
+
+    pub async fn add_challenge_set(&mut self, name: String) -> Result<()> {
+        match self
+            .send(EngineCommand {
+                session: None,
+                action: EngineAction::AddChallengeSet(name),
+            })
+            .await?
+        {
+            ResponseAction::Error(err) => Err(Error::Truinlag(err)),
+            ResponseAction::Success => Ok(()),
+            _ => Err(Error::InvalidSignal),
+        }
+    }
+
+    pub async fn get_challenge_sets(&mut self) -> Result<Vec<ChallengeSet>> {
+        match self
+            .send(EngineCommand {
+                session: None,
+                action: GetChallengeSets,
+            })
+            .await?
+        {
+            ResponseAction::Error(err) => Err(Error::Truinlag(err)),
+            ResponseAction::SendChallengeSets(sets) => Ok(sets),
+            _ => Err(Error::InvalidSignal),
+        }
+    }
 }
 
 pub struct RecvConnection {
@@ -317,31 +345,5 @@ impl InactiveRecvConnection {
     pub async fn disconnect(self) {
         self.eater_handle.abort();
         self.handle.abort();
-    }
-}
-
-impl commands::ResponseAction {
-    fn unwrap_team(action: commands::ResponseAction) -> Result<Team> {
-        match action {
-            ResponseAction::Team(team) => Ok(team),
-            ResponseAction::Error(error) => Err(error.into()),
-            _ => Err(Error::InvalidSignal),
-        }
-    }
-
-    fn unwrap_player(action: commands::ResponseAction) -> Result<Player> {
-        match action {
-            ResponseAction::Player(player) => Ok(player),
-            ResponseAction::Error(error) => Err(error.into()),
-            _ => Err(Error::InvalidSignal),
-        }
-    }
-
-    fn unwrap_send_state(action: commands::ResponseAction) -> Result<(Vec<Team>, Option<Game>)> {
-        match action {
-            ResponseAction::SendState { teams, game } => Ok((teams, game)),
-            ResponseAction::Error(error) => Err(error.into()),
-            _ => Err(Error::InvalidSignal),
-        }
     }
 }
