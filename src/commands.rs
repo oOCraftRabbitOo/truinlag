@@ -106,6 +106,7 @@ pub enum EngineAction {
         team: usize,
         new_name: String,
     },
+    GenerateTeamChallenges(usize),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

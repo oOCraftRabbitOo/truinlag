@@ -11,20 +11,19 @@ use bonsaidb::{
             SerializedCollection, View, ViewMapResult, ViewMappedValue, ViewSchema,
         },
         transaction::Transaction,
-        transmog_pot,
     },
     local::{
         config::{self, Builder},
         Database, Storage,
     },
 };
-use chrono::{self, NaiveTime};
+use chrono::{self, Duration as Dur, NaiveTime};
 use image::imageops::FilterType;
 use partially::Partial;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path};
+use std::{cmp::min, collections::HashMap, path::Path};
 use strsim::normalized_damerau_levenshtein as strcmp;
 use tokio::time::{sleep, Duration};
 use truinlag::{
@@ -43,17 +42,32 @@ struct Config {
     points_per_stationary_minute: u64,
     points_per_travel_minute: u64,
 
+    // perimeter system
+    perim_max_kaff: u64,
+    perim_distance_range: std::ops::Range<u64>,
+
+    // distances
+    normal_period_near_distance_range: std::ops::Range<u64>,
+    normal_period_far_distance_range: std::ops::Range<u64>,
+
     // Zonenkaff
     points_per_connected_zone_less_than_6: u64,
     points_per_bad_connectivity_index: u64,
     points_for_no_train: u64,
     points_for_mongus: u64,
 
+    // challenge generation
+    centre_zone: u64,
+    challenge_sets: Vec<u64>,
+    num_challenges: u64,
+    regio_ratio: f64,
+    zkaff_ratio_range: std::ops::Range<f64>,
+
     // Number of Catchers
     num_catchers: u64,
 
-    // Number of active challenges per team
-    num_challenges: u64,
+    // starting zone id
+    start_zone: u64,
 
     // Bounty system
     bounty_base_points: u64,
@@ -67,6 +81,7 @@ struct Config {
     perimeter_minutes: u64,
     zkaff_minutes: u64,
     end_game_minutes: u64,
+    time_wiggle_minutes: u64,
 
     // Fallback Defaults
     default_challenge_title: String,
@@ -85,12 +100,21 @@ impl Default for Config {
             points_per_walking_minute: 10,
             points_per_stationary_minute: 10,
             points_per_travel_minute: 12,
+            perim_max_kaff: 4,
+            perim_distance_range: 20..61,
+            normal_period_near_distance_range: 0..26,
+            normal_period_far_distance_range: 40..71,
             points_per_bad_connectivity_index: 25,
             points_per_connected_zone_less_than_6: 15,
             points_for_no_train: 30,
             points_for_mongus: 50,
+            centre_zone: 110,
+            challenge_sets: Vec::new(),
+            regio_ratio: 0.4,
+            zkaff_ratio_range: 0.2..1.2,
             num_catchers: 3,
             num_challenges: 3,
+            start_zone: 0,
             bounty_base_points: 100,
             bounty_start_points: 250,
             bounty_percentage: 0.25,
@@ -102,6 +126,7 @@ impl Default for Config {
             perimeter_minutes: 90,
             zkaff_minutes: 90,
             end_game_minutes: 30,
+            time_wiggle_minutes: 7,
             default_challenge_title: "[Kreative Titel]".into(),
             default_challenge_description:
                 "Ihr hend Päch, die Challenge isch unlösbar. Ihr müend e anderi uswähle.".into(),
@@ -239,7 +264,7 @@ impl ChallengeSetEntry {
 #[collection(name = "challenge", views = [UnspecificChallengeEntries, SpecificChallengeEntries, GoodChallengeEntries])]
 struct ChallengeEntry {
     kind: ChallengeType,
-    sets: std::collections::HashSet<u64>,
+    sets: Vec<u64>,
     status: ChallengeStatus,
     title: Option<String>,
     description: Option<String>,
@@ -270,6 +295,30 @@ struct ChallengeEntry {
 }
 
 impl ChallengeEntry {
+    fn distance(&self, from: &DBEntry<ZoneEntry>) -> u64 {
+        *self.zone
+            .iter()
+            .filter_map(|z| from
+                .contents
+                .minutes_to
+                .get(z)
+                .or_else(|| {
+                    eprintln!(
+                        "Engine: error while calculating distance to zone: zone {} (id: {}) doesn't have a distance to the zone with id {}, ignoring zone",
+                        from.contents.zone,
+                        from.id,
+                        z
+                    );
+                    None
+                })
+            )
+        .min()
+        .unwrap_or_else(|| {
+            eprintln!("Engine: error while calculating distance to zone, has no zones or none with valid distances");
+            &0
+        })
+    }
+
     fn to_sendable(
         &self,
         id: u64,
@@ -329,13 +378,18 @@ impl ChallengeEntry {
     }
 
     #[allow(dead_code)]
-    async fn challenge(
+    fn challenge(
         &self,
         config: &Config,
         zone_zoneables: bool,
-        db: &Database,
-    ) -> Option<InOpenChallenge> {
+        zone_db: &[DBEntry<ZoneEntry>],
+        id: u64,
+    ) -> InOpenChallenge {
         // TODO: if zoneable and zone specified do something to let me know kthxbye
+        if zone_db.is_empty() {
+            eprintln!("Engine: there are no zones in the database, challenge generation will not work as expected");
+        }
+
         let mut points = 0_i64;
         points += self.additional_points as i64;
         if let Some(kaffskala) = self.kaffskala {
@@ -352,65 +406,36 @@ impl ChallengeEntry {
             .choose(&mut thread_rng())
             .unwrap_or(0);
         points += reps as i64 * self.points_per_rep as i64;
-        let mut zone_entries = vec![];
-        let initial_zones = self.zone.clone();
-        for zone in initial_zones {
-            match db
-                .view::<ZonesByZone>()
-                .with_key(&zone)
-                .query_with_collection_docs()
-            {
-                Ok(zones) => {
-                    if zones.is_empty() {
-                        eprintln!(
-                            "Engine: Couldn't find zone {} in database, skipping Zonenkaff and granting 0 points",
-                            zone
-                        );
-                    } else if zones.len() > 1 {
-                        let entry = zones
-                            .get(0)
-                            .expect("This should never fail, since zones.len() > 1");
-                        eprintln!(
-                            "Engine: Found {} entries for zone {} in database, using the entry with id {} for Zonenkaff",
-                            zones.len(),
-                            zone,
-                            entry.document.header.id
-                            );
-                        zone_entries.push(entry.document.clone())
-                    } else {
-                        zone_entries.push(
-                            zones
-                                .get(0)
-                                .expect("This should never even be called")
-                                .document
-                                .clone(),
-                        )
-                    }
-                }
-                Err(err) => {
-                    eprintln!(
-                        "Engine: Couldn't query database for zone {}, ignoring zone: {}",
-                        zone, err
-                    )
-                }
-            }
+        let mut zone_entries = self
+            .zone
+            .iter()
+            .filter_map(|z| zone_db.iter().find(|e| &e.id == z).cloned())
+            .collect();
+        if zone_zoneables && matches!(self.kind, ChallengeType::Zoneable) && !zone_db.is_empty() {
+            zone_entries = vec![zone_db
+                .iter()
+                .choose(&mut thread_rng())
+                .expect("There are probably no ZoneEntries in the database")
+                .clone()]
         }
-        if zone_zoneables && matches!(self.kind, ChallengeType::Zoneable) {
-            match ZoneEntry::all(db).query() {
-                Ok(entries) => {
-                    zone_entries = vec![entries
+        if let Some(place_type) = &self.random_place {
+            match place_type {
+                RandomPlaceType::Zone => {
+                    zone_entries = vec![zone_db
                         .iter()
                         .choose(&mut thread_rng())
                         .expect("There are probably no ZoneEntries")
-                        .clone()]
+                        .clone()];
                 }
-                Err(err) => {
-                    eprintln!("Engine: Couldn't retreive zones from database while selecting random zone for zoneable, skipping step: {}", err)
+                RandomPlaceType::SBahnZone => {
+                    zone_entries = vec![zone_db
+                        .iter()
+                        .filter(|z| z.contents.s_bahn_zone)
+                        .choose(&mut thread_rng())
+                        .expect("no s-bahn zones found in database")
+                        .clone()];
                 }
             }
-        }
-        if let Some(place_type) = &self.random_place {
-            match place_type{RandomPlaceType::Zone=>{match ZoneEntry::all(db).query(){Ok(entries)=>zone_entries=vec![entries.iter().choose(&mut thread_rng()).expect("There are probably no ZoneEntries").clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve zones from database while choosing random zone, skipping step: {}",err),}}RandomPlaceType::SBahnZone=>{match db.view::<ZonesBySBahn>().with_key(&true).query_with_collection_docs(){Ok(entries)=>zone_entries=vec![entries.documents.values().choose(&mut thread_rng()).expect("no s-bahn zones found in database").clone()],Err(err)=>eprintln!("Engine: Couldn't retrieve s-bahn zones from database while choosing random s-bahn zone, skipping step: {}",err),}}}
         }
         let (zone, z_points) = zone_entries.iter().fold((None, 0), |acc, z| {
             if acc.1 == 0 || acc.1 > z.contents.zonic_kaffness(config) {
@@ -459,7 +484,7 @@ impl ChallengeEntry {
             *d = d.replace("%r", &reps.to_string());
         }
 
-        let zone = zone.map(|z| z.header.id);
+        let zone = zone.map(|z| z.id);
 
         let mut action = None;
         if let Some(action_entry) = &self.action {
@@ -481,13 +506,14 @@ impl ChallengeEntry {
             });
         }
 
-        Some(InOpenChallenge {
+        InOpenChallenge {
             title: title.unwrap_or(config.default_challenge_title.clone()),
             description: description.unwrap_or(config.default_challenge_description.clone()),
             points: points as u64,
             action,
             zone,
-        })
+            id,
+        }
     }
 }
 
@@ -566,6 +592,7 @@ impl CollectionMapReduce for UnspecificChallengeEntries {
                 ChallengeType::Unspezifisch => true,
                 ChallengeType::Ortsspezifisch => false,
                 ChallengeType::Regionsspezifisch => true,
+                ChallengeType::ZKaff => false,
             } && document.contents.status == ChallengeStatus::Approved,
             1,
         )
@@ -596,6 +623,7 @@ impl CollectionMapReduce for SpecificChallengeEntries {
                 ChallengeType::Unspezifisch => false,
                 ChallengeType::Ortsspezifisch => true,
                 ChallengeType::Regionsspezifisch => false,
+                ChallengeType::ZKaff => false,
             } && document.contents.status == ChallengeStatus::Approved,
             1,
         )
@@ -739,80 +767,66 @@ pub struct TeamEntry {
     pub colour: Colour,
     pub points: u64,
     pub bounty: u64,
+    pub zone_id: u64,
     pub locations: Vec<(f64, f64, NaiveTime)>,
     pub challenges: Vec<InOpenChallenge>,
-    pub completed_challenges: Vec<ChompletedChallengePeriod>,
-    pub catcher_periods: Vec<CatcherPeriod>,
-    pub caught_periods: Vec<CaughtPeriod>,
-    pub trophy_periods: Vec<TrophyPeriod>,
+    pub periods: Vec<Period>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrophyPeriod {
-    trophies: u64,
-    points_spent: u64,
+pub struct Period {
+    context: PeriodContext,
     position_start_index: u64,
     position_end_index: u64,
+    end_time: chrono::NaiveTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CaughtPeriod {
-    catcher_team: u64,
-    bounty: u64,
-    position_start_index: u64,
-    position_end_index: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CatcherPeriod {
-    caught_team: u64,
-    bounty: u64,
-    position_start_index: u64,
-    position_end_index: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChompletedChallengePeriod {
-    title: String,
-    description: String,
-    zone: Option<u64>,
-    points: u64,
-    photo: u64,
-    time: chrono::NaiveTime,
-    position_start_index: u64,
-    position_end_index: u64,
-}
-
-impl ChompletedChallengePeriod {
-    pub fn to_sendable(&self) -> truinlag::CompletedChallenge {
-        truinlag::CompletedChallenge {
-            title: self.title.clone(),
-            description: self.description.clone(),
-            points: self.points,
-            time: self.time,
-        }
-    }
+pub enum PeriodContext {
+    Trophy {
+        trophies: u64,     // the number of trophies bought at the end of the period
+        points_spent: u64, // the amount of points spent on the trophies
+    },
+    Caught {
+        catcher_team: u64, // the id of the team that was the catcher
+        bounty: u64,       // the bounty handed over to said team
+    },
+    Catcher {
+        caught_team: u64, // the id of the team that was caught
+        bounty: u64,      // the bounty collected from said team
+    },
+    CompletedChallenge {
+        title: String,       // the title of the completed challenge
+        description: String, // the description of the completed challenge
+        zone: Option<u64>,   // the zone of the completed challenge
+        points: u64,         // the points earned by completing the challenge
+        photo: u64,          // the id of the challenge photo
+        id: u64,
+    },
 }
 
 impl TeamEntry {
-    fn new(name: String, players: Vec<u64>, discord_channel: Option<u64>, colour: Colour) -> Self {
+    fn new(
+        name: String,
+        players: Vec<u64>,
+        discord_channel: Option<u64>,
+        colour: Colour,
+        config: Config,
+    ) -> Self {
         TeamEntry {
             name,
             players,
             discord_channel,
             colour,
-            completed_challenges: Vec::new(),
-            challenges: Vec::new(),
+            challenges: Vec::with_capacity(config.num_challenges as usize),
             role: TeamRole::Runner,
             points: 0,
             bounty: 0,
             locations: Vec::new(),
-            catcher_periods: Vec::new(),
-            caught_periods: Vec::new(),
-            trophy_periods: Vec::new(),
+            periods: Vec::new(),
+            zone_id: config.start_zone,
         }
     }
-
     fn to_sendable(&self, player_entries: &[DBEntry<PlayerEntry>], index: usize) -> truinlag::Team {
         truinlag::Team {
             colour: self.colour,
@@ -835,17 +849,702 @@ impl TeamEntry {
                 .collect(),
             challenges: self.challenges.iter().map(|c| c.to_sendable()).collect(),
             completed_challenges: self
-                .completed_challenges
+                .periods
                 .iter()
-                .map(|c| c.to_sendable())
+                .filter_map(|p| match &p.context {
+                    PeriodContext::CompletedChallenge {
+                        title,
+                        description,
+                        points,
+                        id,
+                        zone: _,
+                        photo: _,
+                    } => Some(CompletedChallenge {
+                        title: title.clone(),
+                        description: description.clone(),
+                        points: *points,
+                        time: p.end_time,
+                        id: *id,
+                    }),
+                    _ => None,
+                })
                 .collect(),
-            location: if !self.locations.is_empty() {
-                Some((self.locations[0].0, self.locations[0].1))
-            } else {
-                None
-            },
+            location: self.locations.last().map(|loc| (loc.0, loc.1)),
         }
     }
+
+    pub(self) fn generate_challenges(
+        &mut self,
+        config: &Config,
+        raw_challenges: &[DBEntry<ChallengeEntry>],
+        zone_entries: &[DBEntry<ZoneEntry>],
+    ) {
+        // Challenge selection is the perhaps most complicated part of the game, so I think it
+        // warrants some good commenting. The process for challenge generation differs mainly based
+        // on the generation period. There are (currently) 5 of them. In this function, the current
+        // period is obtained in the form of an enum from a top level function and a match
+        // expression is used to perform different actions depending on the period. Note that the
+        // challenge generation process is completely different from period to period, so the match
+        // expression actually makes up almost the entire function body.
+        let mut filtered_raw_challenges: Vec<&DBEntry<ChallengeEntry>> = raw_challenges
+            .iter()
+            .filter(|c| {
+                config
+                    .challenge_sets
+                    .iter()
+                    .any(|s| c.contents.sets.contains(s))
+                    && self
+                        .periods
+                        .iter()
+                        .filter_map(|p| match &p.context {
+                            PeriodContext::CompletedChallenge {
+                                title: _,
+                                description: _,
+                                zone: _,
+                                points: _,
+                                photo: _,
+                                id,
+                            } => Some(id),
+                            _ => None,
+                        })
+                        .all(|i| *i != c.id)
+            })
+            .collect();
+        if filtered_raw_challenges.is_empty() {
+            filtered_raw_challenges = raw_challenges.iter().collect();
+            eprintln!("Engine: there are no more challenges that can be generated for team {} with the currently selected challenge sets. using all challenges", self.name);
+        }
+        let team_zone = zone_entries
+            .iter()
+            .find(|z| z.id == self.zone_id)
+            .expect("team is in a zone that is not in db");
+        self.challenges = match get_period(config) {
+            GenerationPeriod::Specific => {
+                self.generate_specific_challenges(config, &filtered_raw_challenges, zone_entries)
+            }
+            GenerationPeriod::Normal => self.generate_normal_challenges(
+                config,
+                &filtered_raw_challenges,
+                raw_challenges,
+                zone_entries,
+                team_zone,
+            ),
+            GenerationPeriod::Perimeter(ratio) => self.generate_perimeter_challenges(
+                config,
+                &filtered_raw_challenges,
+                raw_challenges,
+                zone_entries,
+                ratio,
+            ),
+            GenerationPeriod::ZKaff(ratio) => self.generate_zkaff_challenges(
+                config,
+                &filtered_raw_challenges,
+                raw_challenges,
+                zone_entries,
+                ratio,
+            ),
+            GenerationPeriod::EndGame => self.generate_end_game_challenges(
+                config,
+                &filtered_raw_challenges,
+                raw_challenges,
+                zone_entries,
+            ),
+        };
+        self.challenges.shuffle(&mut thread_rng());
+    }
+
+    pub(self) fn generate_end_game_challenges(
+        &self,
+        config: &Config,
+        raw_challenges: &[&DBEntry<ChallengeEntry>],
+        backup_challenges: &[DBEntry<ChallengeEntry>],
+        zone_entries: &[DBEntry<ZoneEntry>],
+    ) -> Vec<InOpenChallenge> {
+        // End game challenge generation is relatively simple. 1 Challenge is ZKaff, the others are
+        // unspecific. No further restrictions apply.
+
+        let mut unspecific_challenges = raw_challenges
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.contents.kind,
+                    ChallengeType::Zoneable | ChallengeType::Unspezifisch
+                )
+            })
+            .collect();
+
+        let mut ret = Vec::new();
+
+        for _ in 1..config.num_challenges - 1 {
+            ret.push(smart_choose(
+                &mut unspecific_challenges,
+                raw_challenges,
+                backup_challenges,
+                "generating an unspecific challenge during end game period",
+                config,
+                false,
+                zone_entries,
+            ));
+        }
+
+        let mut zkaff_challenges = raw_challenges
+            .iter()
+            .filter(|c| matches!(c.contents.kind, ChallengeType::ZKaff))
+            .collect();
+
+        ret.push(smart_choose(
+            &mut zkaff_challenges,
+            raw_challenges,
+            backup_challenges,
+            "generating ZKaff challenge in end game period",
+            config,
+            true,
+            zone_entries,
+        ));
+
+        ret
+    }
+
+    pub(self) fn generate_zkaff_challenges(
+        &self,
+        config: &Config,
+        raw_challenges: &[&DBEntry<ChallengeEntry>],
+        backup_challenges: &[DBEntry<ChallengeEntry>],
+        zone_entries: &[DBEntry<ZoneEntry>],
+        ratio: f64,
+    ) -> Vec<InOpenChallenge> {
+        // ZKaff challenge generation works the same as perimeter generation, except that ratio of
+        // the generated specific challenges will be ZKaff challenges. For increased consistency,
+        // the probability is applied sequentially, first to the far challenge, then to the near
+        // one. So if ratio = 0.5, the far challenge will always be a ZKaff challenge and the near
+        // one never. If ratio = 0.75, the far challenge will always ZKaff and the near one has a
+        // 50/50 chance.
+        // Also, if there are not 3 challenges, we use fallback generation here as well, mostly
+        // because I'm lazy.
+
+        let ratio =
+            (1.0 - ratio) * config.zkaff_ratio_range.start + ratio * config.zkaff_ratio_range.end;
+
+        let mut zkaff_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
+            .iter()
+            .filter(|c| matches!(c.contents.kind, ChallengeType::ZKaff))
+            .collect();
+
+        let mut generated = self.generate_perimeter_challenges(
+            config,
+            raw_challenges,
+            backup_challenges,
+            zone_entries,
+            1_f64,
+        );
+
+        if config.num_challenges == 3 {
+            if ratio < 0.5 {
+                if ratio >= 0.0 && thread_rng().gen_bool(ratio * 2_f64) {
+                    generated[0] = smart_choose(
+                        &mut zkaff_challenges,
+                        raw_challenges,
+                        backup_challenges,
+                        "generating first ZKaff challenge",
+                        config,
+                        true,
+                        zone_entries,
+                    );
+                }
+                generated
+            } else {
+                generated[0] = smart_choose(
+                    &mut zkaff_challenges,
+                    raw_challenges,
+                    backup_challenges,
+                    "generating first ZKaff challenge",
+                    config,
+                    true,
+                    zone_entries,
+                );
+                if ratio > 1.0 || thread_rng().gen_bool((ratio - 0.5) * 2.0) {
+                    generated[1] = smart_choose(
+                        &mut zkaff_challenges,
+                        raw_challenges,
+                        backup_challenges,
+                        "generating second ZKaff challenge",
+                        config,
+                        true,
+                        zone_entries,
+                    );
+                }
+                generated
+            }
+        } else {
+            self.generate_fallback_challenges(
+                config,
+                raw_challenges,
+                backup_challenges,
+                zone_entries,
+            )
+        }
+    }
+
+    pub(self) fn generate_specific_challenges(
+        &self,
+        config: &Config,
+        raw_challenges: &[&DBEntry<ChallengeEntry>],
+        zone_entries: &[DBEntry<ZoneEntry>],
+    ) -> Vec<InOpenChallenge> {
+        // The specific period challenge generation is used at the very start of the game
+        // and it is the most simple. Three challenges are generated and they must all be
+        // either kaff challenges or ortsspezifisch.
+        raw_challenges
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.contents.kind,
+                    ChallengeType::Kaff | ChallengeType::Ortsspezifisch | ChallengeType::Zoneable
+                )
+            })
+            .choose_multiple(&mut thread_rng(), config.num_challenges as usize)
+            // There is no extensive fallback system here for if there aren't enough challenges
+            // available, but it should be fine, since this generation type is only used at the
+            // start of the game.
+            .iter()
+            .map(|r| r.contents.challenge(config, true, zone_entries, r.id))
+            .collect()
+    }
+
+    pub(self) fn generate_perimeter_challenges(
+        &self,
+        config: &Config,
+        raw_challenges: &[&DBEntry<ChallengeEntry>],
+        backup_challenges: &[DBEntry<ChallengeEntry>],
+        zone_entries: &[DBEntry<ZoneEntry>],
+        ratio: f64,
+    ) -> Vec<InOpenChallenge> {
+        // Perimeter period challenge generation generates three different kinds of challenges
+        // based on perim distance. The current perim distance changes fluidly with time passing.
+        // It lerps from the maximum distance to the minimum distance as defined by the config
+        // using the ratio. The perim distance describes the distance from zone 110 in minutes.
+        // 1. A far challenge, i.e. a challenge with perim distance in the upper half of the
+        //    current perim distance. It is specific and may not be zoneable, but it may be region-specific.
+        // 2. A near challenge, i.e. a challenge with perim distance in the lower half of the
+        //    current perim distance. It is specific, may be zoneable, but not region-specific.
+        // 3. An unspecific challenge, i.e... Well it's just an unspecific challenge.
+        //
+        // Also, all of these challenges have a maximum kaffness value which is constant because I
+        // can't be bothered.
+        //
+        // This system is designed for exactly 3 challenges, but for completeness, there
+        // should be a fallback for different challenge amounts. If more or fewer than 3
+        // challenges are requested, all challenges will be generated the same way as
+        // during the specific period save one which will be unspecific.
+
+        match zone_entries
+            .iter()
+            .find(|z| z.contents.zone == config.centre_zone)
+        {
+            Some(centre_zone) => {
+                if config.num_challenges == 3 {
+                    let current_max_perim = lerp(
+                        config.perim_distance_range.start,
+                        config.perim_distance_range.end,
+                        ratio,
+                    );
+
+                    let mut far_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
+                        .iter()
+                        .filter(|c| {
+                            matches!(
+                                c.contents.kind,
+                                ChallengeType::Ortsspezifisch
+                                    | ChallengeType::Kaff
+                                    | ChallengeType::Regionsspezifisch
+                            ) && (c.contents.kaffskala.is_none()
+                                || matches!(
+                                    c.contents.kaffskala,
+                                    Some(x) if x as u64 <= config.perim_max_kaff))
+                                && (0..current_max_perim / 2)
+                                    .contains(&c.contents.distance(centre_zone))
+                        })
+                        .collect();
+
+                    let mut near_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
+                        .iter()
+                        .filter(|c| {
+                            matches!(
+                                c.contents.kind,
+                                ChallengeType::Ortsspezifisch
+                                    | ChallengeType::Kaff
+                                    | ChallengeType::Zoneable
+                            ) && (c.contents.kaffskala.is_none()
+                                || matches!(
+                                    c.contents.kaffskala,
+                                    Some(x) if x as u64 <= config.perim_max_kaff
+                                ))
+                                && (current_max_perim / 2..current_max_perim)
+                                    .contains(&c.contents.distance(centre_zone))
+                        })
+                        .collect();
+
+                    let mut unspecific_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
+                        .iter()
+                        .filter(|c| {
+                            matches!(
+                                c.contents.kind,
+                                ChallengeType::Unspezifisch | ChallengeType::Zoneable
+                            )
+                        })
+                        .collect();
+
+                    vec![
+                        smart_choose(
+                            &mut far_challenges,
+                            raw_challenges,
+                            backup_challenges,
+                            "generating the far perimeter challenge",
+                            config,
+                            true,
+                            zone_entries,
+                        ),
+                        smart_choose(
+                            &mut near_challenges,
+                            raw_challenges,
+                            backup_challenges,
+                            "generating the near perimeter challenge",
+                            config,
+                            true,
+                            zone_entries,
+                        ),
+                        smart_choose(
+                            &mut unspecific_challenges,
+                            raw_challenges,
+                            backup_challenges,
+                            "generating the unspecific perimeter challenge",
+                            config,
+                            false,
+                            zone_entries,
+                        ),
+                    ]
+                } else {
+                    self.generate_fallback_challenges(
+                        config,
+                        raw_challenges,
+                        backup_challenges,
+                        zone_entries,
+                    )
+                }
+            }
+            None => {
+                eprintln!("Engine: VERY BAD ERROR: couldn't find zone 110 while generating perimeter challenge, generating fallback challenges instead");
+                self.generate_fallback_challenges(
+                    config,
+                    raw_challenges,
+                    backup_challenges,
+                    zone_entries,
+                )
+            }
+        }
+    }
+
+    pub(self) fn generate_normal_challenges(
+        &self,
+        config: &Config,
+        raw_challenges: &[&DBEntry<ChallengeEntry>],
+        backup_challenges: &[DBEntry<ChallengeEntry>],
+        zone_entries: &[DBEntry<ZoneEntry>],
+        team_zone: &DBEntry<ZoneEntry>,
+    ) -> Vec<InOpenChallenge> {
+        // Normal period challenge generation generates three different kinds of
+        // challenges.
+        // 1. A specific challenge that is close by
+        // 2. either a specific challenge that is far away or a region-specific challenge
+        // 3. an unspecific challenge.
+        //
+        // This system is designed for exactly 3 challenges, but for completeness, there
+        // should be a fallback for different challenge amounts. If more or fewer than 3
+        // challenges are requested, all challenges will be generated the same way as
+        // during the specific period save one which will be unspecific.
+
+        if config.num_challenges == 3 {
+            let mut far_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
+                .iter()
+                .filter(|c| {
+                    matches!(
+                        c.contents.kind,
+                        ChallengeType::Kaff
+                            | ChallengeType::Ortsspezifisch
+                            | ChallengeType::Zoneable
+                    ) && config
+                        .normal_period_far_distance_range
+                        .contains(&c.contents.distance(team_zone))
+                })
+                .collect();
+
+            let mut near_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
+                .iter()
+                .filter(|c| {
+                    matches!(
+                        c.contents.kind,
+                        ChallengeType::Kaff
+                            | ChallengeType::Ortsspezifisch
+                            | ChallengeType::Zoneable
+                    ) && config
+                        .normal_period_near_distance_range
+                        .contains(&c.contents.distance(team_zone))
+                })
+                .collect();
+
+            let mut regio_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
+                .iter()
+                .filter(|c| matches!(c.contents.kind, ChallengeType::Regionsspezifisch))
+                .collect();
+
+            let mut unspecific_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
+                .iter()
+                .filter(|c| {
+                    matches!(
+                        c.contents.kind,
+                        ChallengeType::Unspezifisch | ChallengeType::Zoneable
+                    )
+                })
+                .collect();
+            vec![
+                if thread_rng().gen_bool(config.regio_ratio) {
+                    smart_choose(
+                        &mut far_challenges,
+                        raw_challenges,
+                        backup_challenges,
+                        "choosing the far away challenge during normal period",
+                        config,
+                        true,
+                        zone_entries,
+                    )
+                } else {
+                    smart_choose(
+                        &mut regio_challenges,
+                        raw_challenges,
+                        backup_challenges,
+                        "choosing the regio challenge during normal period",
+                        config,
+                        false,
+                        zone_entries,
+                    )
+                },
+                smart_choose(
+                    &mut near_challenges,
+                    raw_challenges,
+                    backup_challenges,
+                    "choosing the near challenge during normal period",
+                    config,
+                    true,
+                    zone_entries,
+                ),
+                smart_choose(
+                    &mut unspecific_challenges,
+                    raw_challenges,
+                    backup_challenges,
+                    "choosing the unspecdific challenge during normal period",
+                    config,
+                    false,
+                    zone_entries,
+                ),
+            ]
+        } else {
+            self.generate_fallback_challenges(
+                config,
+                raw_challenges,
+                backup_challenges,
+                zone_entries,
+            )
+        }
+    }
+
+    pub(self) fn generate_fallback_challenges(
+        &self,
+        config: &Config,
+        raw_challenges: &[&DBEntry<ChallengeEntry>],
+        backup_challenges: &[DBEntry<ChallengeEntry>],
+        zone_entries: &[DBEntry<ZoneEntry>],
+    ) -> Vec<InOpenChallenge> {
+        // This function is called by other challenge generation functions if they for some reason
+        // cannot generate their challenges as expected and, in particular, if there is an unexpected
+        // amount of challenges. This system generates all challenges the same way as
+        // during the specific period save one which will be unspecific.
+
+        let challenges = raw_challenges
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.contents.kind,
+                    ChallengeType::Kaff | ChallengeType::Ortsspezifisch | ChallengeType::Zoneable
+                )
+            })
+            .choose_multiple(&mut thread_rng(), config.num_challenges as usize - 1);
+        let mut challenges: Vec<InOpenChallenge> = challenges
+            .iter()
+            .map(|c| c.contents.challenge(config, true, zone_entries, c.id))
+            .collect();
+        let mut unspecific_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.contents.kind,
+                    ChallengeType::Unspezifisch | ChallengeType::Zoneable
+                )
+            })
+            .collect();
+        challenges.push(smart_choose(
+            &mut unspecific_challenges,
+            raw_challenges,
+            backup_challenges,
+            "choosing the unspecific challenge during backup normal period",
+            config,
+            false,
+            zone_entries,
+        ));
+        challenges
+    }
+
+    fn new_period(&mut self, context: PeriodContext) {
+        self.periods.push(Period {
+            context,
+            position_start_index: min(
+                self.periods
+                    .last()
+                    .map(|p| p.position_end_index + 1)
+                    .unwrap_or(0),
+                self.locations.len() as u64 - 1,
+            ),
+            position_end_index: self.locations.len() as u64 - 1,
+            end_time: chrono::Local::now().time(),
+        });
+    }
+
+    fn be_caught(&mut self, catcher_id: u64) {
+        self.challenges.clear();
+        self.role = TeamRole::Catcher;
+        self.new_period(PeriodContext::Caught {
+            catcher_team: catcher_id,
+            bounty: self.bounty,
+        });
+        self.bounty = 0;
+    }
+
+    fn have_caught(
+        &mut self,
+        bounty: u64,
+        caught_id: u64,
+        config: &Config,
+        challenge_db: &[DBEntry<ChallengeEntry>],
+        zone_db: &[DBEntry<ZoneEntry>],
+    ) {
+        self.generate_challenges(config, challenge_db, zone_db);
+        self.role = TeamRole::Runner;
+        self.points += bounty;
+        self.bounty = 0;
+        self.new_period(PeriodContext::Catcher {
+            caught_team: caught_id,
+            bounty,
+        });
+    }
+
+    fn complete_challenge(
+        &mut self,
+        id: usize,
+        config: &Config,
+        challenge_db: &[DBEntry<ChallengeEntry>],
+        zone_db: &[DBEntry<ZoneEntry>],
+    ) -> Result<(), ()> {
+        match self.challenges.get(id).cloned() {
+            None => Err(()),
+            Some(completed) => {
+                self.points += completed.points;
+                self.bounty += (completed.points as f64 * config.bounty_percentage) as u64;
+                self.new_period(PeriodContext::CompletedChallenge {
+                    title: completed.title.clone(),
+                    description: completed.description.clone(),
+                    zone: completed.zone,
+                    points: completed.points,
+                    photo: 0,
+                    id: completed.id,
+                });
+                if let Some(zone) = completed.zone {
+                    self.zone_id = zone;
+                }
+                self.generate_challenges(config, challenge_db, zone_db);
+                Ok(())
+            }
+        }
+    }
+}
+
+fn smart_choose(
+    challenges: &mut Vec<&&DBEntry<ChallengeEntry>>,
+    raw_challenges: &[&DBEntry<ChallengeEntry>],
+    backup_challenges: &[DBEntry<ChallengeEntry>],
+    context: &str,
+    config: &Config,
+    zone_zoneables: bool,
+    zone_db: &[DBEntry<ZoneEntry>],
+) -> InOpenChallenge {
+    match challenges.iter().enumerate().choose(&mut thread_rng()) {
+        None => {
+            eprintln!("Engine: {} Not enough challenges, context: {}. generatig from all uncompleted challenges within the currents sets", chrono::Local::now(), context);
+            let selected = raw_challenges.choose(&mut thread_rng()).cloned().unwrap_or_else(|| {
+            eprintln!("Engine: {} Not enough challenges, context: {}. generating from all challenges", chrono::Local::now(), context);
+            backup_challenges.choose(&mut thread_rng()).expect("There were no raw challenges, that should never happen")
+        });
+            selected
+                .contents
+                .challenge(config, zone_zoneables, zone_db, selected.id)
+        }
+        Some((i, selected)) => {
+            let ret = selected
+                .contents
+                .challenge(config, zone_zoneables, zone_db, selected.id);
+            challenges.remove(i);
+            ret
+        }
+    }
+}
+
+enum GenerationPeriod {
+    Specific,
+    Normal,
+    Perimeter(f64),
+    ZKaff(f64),
+    EndGame,
+}
+
+fn get_period(config: &Config) -> GenerationPeriod {
+    let mut now = chrono::Local::now().time();
+    if now <= config.start_time + chrono::Duration::minutes(config.specific_minutes as i64) {
+        GenerationPeriod::Specific
+    } else if now >= config.end_time {
+        GenerationPeriod::EndGame
+    } else {
+        let wiggle = chrono::Duration::seconds(thread_rng().gen_range(
+            -60 * config.time_wiggle_minutes as i64..=60 * config.time_wiggle_minutes as i64,
+        ));
+        now += wiggle;
+        let end_game_time = config.end_time - Dur::minutes(config.end_game_minutes as i64);
+        let zurich_time = end_game_time - Dur::minutes(config.zkaff_minutes as i64);
+        let perimeter_time = zurich_time - Dur::minutes(config.perimeter_minutes as i64);
+        if now >= end_game_time {
+            GenerationPeriod::EndGame
+        } else if now >= zurich_time {
+            let ratio = (now - zurich_time).num_minutes() as f64 / config.zkaff_minutes as f64;
+            GenerationPeriod::ZKaff(ratio)
+        } else if now >= perimeter_time {
+            let ratio =
+                (now - perimeter_time).num_minutes() as f64 / config.perimeter_minutes as f64;
+            GenerationPeriod::Perimeter(ratio)
+        } else {
+            GenerationPeriod::Normal
+        }
+    }
+}
+
+fn lerp(min: u64, max: u64, t: f64) -> u64 {
+    (min as f64 * (1_f64 - t) + max as f64) as u64
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -859,6 +1558,7 @@ enum ChallengeAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InOpenChallenge {
+    id: u64,
     title: String,
     description: String,
     points: u64,
@@ -1122,24 +1822,41 @@ impl Session {
         command: EngineAction,
         session_id: u64,
         player_entries: &[DBEntry<PlayerEntry>],
+        challenge_entries: &[DBEntry<ChallengeEntry>],
+        zone_entries: &[DBEntry<ZoneEntry>],
     ) -> InternEngineResponsePackage {
         use commands::Error::*;
         use BroadcastAction::*;
         use EngineAction::*;
         use ResponseAction::*;
         match command {
+            GenerateTeamChallenges(id) => {
+                let config = self.config();
+                match self.teams.get_mut(id) {
+                    None => Error(NotFound).into(),
+                    Some(team) => {
+                        team.generate_challenges(&config, challenge_entries, zone_entries);
+                        Success.into()
+                    }
+                }
+            }
             AddChallengeToTeam { team, challenge } => match self.teams.get_mut(team) {
                 // THIS METHOD SHOULD BE TEMPORARY AND EXISTS ONLY FOR TESTING PURPOSES
                 None => Error(NotFound).into(),
                 Some(team) => {
-                    team.challenges.push(InOpenChallenge {
-                        title: challenge.title,
-                        description: challenge.description,
-                        points: challenge.points,
-                        action: None,
-                        zone: None,
-                    });
-                    Success.into()
+                    if self.game.is_some() {
+                        Error(GameInProgress).into()
+                    } else {
+                        team.challenges.push(InOpenChallenge {
+                            title: challenge.title,
+                            description: challenge.description,
+                            points: challenge.points,
+                            action: None,
+                            zone: None,
+                            id: 0,
+                        });
+                        Success.into()
+                    }
                 }
             },
             RenameTeam { team, new_name } => match self.teams.get_mut(team) {
@@ -1182,7 +1899,6 @@ impl Session {
                 },
             },
             SendLocation { player, location } => {
-                //println!("Engine: received SendLocation");
                 match self
                     .teams
                     .iter()
@@ -1190,11 +1906,11 @@ impl Session {
                 {
                     None => Error(NotFound).into(),
                     Some(team) => {
-                        self.teams[team].locations.insert(
-                            0,
-                            (location.0, location.1, chrono::offset::Local::now().time()),
-                        );
-                        //println!("Engine: done with SendLocation");
+                        self.teams[team].locations.push((
+                            location.0,
+                            location.1,
+                            chrono::offset::Local::now().time(),
+                        ));
                         EngineResponse {
                             response_action: Success,
                             broadcast_action: Some(Location { team, location }),
@@ -1291,15 +2007,20 @@ impl Session {
                             }
                         }
                     };
-                    self.teams
-                        .push(TeamEntry::new(name, Vec::new(), discord_channel, colour));
+                    self.teams.push(TeamEntry::new(
+                        name,
+                        Vec::new(),
+                        discord_channel,
+                        colour,
+                        self.config(),
+                    ));
                     Success.into()
                 }
             }
             Start => match self.game {
                 Some(_) => Error(GameInProgress).into(),
                 None => {
-                    todo!(); // TODO:
+                    Error(NotImplemented).into() // TODO:
                 }
             },
             Stop => Error(NotImplemented).into(), // TODO:
@@ -1336,23 +2057,6 @@ where
 {
     id: u64,
     contents: T,
-}
-
-impl<T> DBEntry<T>
-where
-    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
-{
-    fn make_entry_vector(db: &Database) -> Vec<Self> {
-        T::all(db)
-            .query()
-            .unwrap()
-            .into_iter()
-            .map(|d| DBEntry {
-                id: d.header.id,
-                contents: d.contents,
-            })
-            .collect()
-    }
 }
 
 #[allow(dead_code)]
@@ -1490,7 +2194,7 @@ impl Engine {
                 self.changes_since_save = true;
                 match command.session {
                     Some(id) => match self.sessions.iter_mut().find(|s| s.id == id) {
-                        Some(session) => session.contents.vroom(command.action, id, &self.players),
+                        Some(session) => session.contents.vroom(command.action, id, &self.players, &self.challenges, &self.zones),
                         None => Error(NotFound).into()
                     }
                     None => match command.action {
@@ -1693,6 +2397,7 @@ impl Engine {
                         AssignPlayerToTeam { player: _, team: _ } => Error(NoSessionSupplied).into(),
                         MakeTeamRunner(_) => Error(NoSessionSupplied).into(),
                         MakeTeamCatcher(_) => Error(NoSessionSupplied).into(),
+                        GenerateTeamChallenges(_) => Error(NoSessionSupplied).into(),
                         AddChallengeToTeam { team: _, challenge: _ } => Error(NoSessionSupplied).into(),
                         RenameTeam { team: _, new_name: _ } => Error(NoSessionSupplied).into(),
                     },
@@ -1759,7 +2464,7 @@ impl Engine {
                                     }
                                 }
 
-                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                sleep(Duration::from_secs(5)).await;
                                 InternEngineCommand::AutoSave
                             },
                         ))]),

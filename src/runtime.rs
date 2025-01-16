@@ -55,6 +55,7 @@ pub enum InternEngineResponse {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum InternEngineCommand {
     Command(EngineCommand),
     AutoSave,
@@ -421,7 +422,7 @@ async fn engine(
             EngineSignal::Shutdown => {
                 println!("Engine: shutdown signal received, awaiting tasks");
                 for handle in handles {
-                    handle.await;
+                    let _ = handle.await;
                 }
                 println!("Engine: tasks awaited, breaking loop");
                 break;
@@ -473,7 +474,6 @@ async fn io(
     async fn engine_parser(
         mut rx: mpsc::Receiver<IOSignal>,
         stream: net::unix::OwnedWriteHalf,
-        addr: &net::unix::SocketAddr,
     ) -> Result<()> {
         let mut transport = FramedWrite::new(stream, LengthDelimitedCodec::new());
 
@@ -485,7 +485,6 @@ async fn io(
                 IOSignal::Command(command) => {
                     let serialized = bincode::serialize(&command)?;
                     transport.send(Bytes::from(serialized)).await?;
-                    //println!("IO {:?}: sent thing to client", addr)
                 }
             };
         }
@@ -504,7 +503,6 @@ async fn io(
     async fn response_fwd(
         mut rx: mpsc::Receiver<oneshot::Receiver<IOSignal>>,
         tx: mpsc::Sender<IOSignal>,
-        addr: &net::unix::SocketAddr,
     ) -> Result<()> {
         loop {
             tx.send(
@@ -514,7 +512,6 @@ async fn io(
                     .await?,
             )
             .await?;
-            //println!("IO {:?}: forwarded response", addr);
         }
     }
 
@@ -522,13 +519,10 @@ async fn io(
         tx: mpsc::Sender<EngineSignal>,
         recv_tx: mpsc::Sender<oneshot::Receiver<IOSignal>>,
         stream: net::unix::OwnedReadHalf,
-        addr: &net::unix::SocketAddr,
     ) -> Result<()> {
         let mut transport = FramedRead::new(stream, LengthDelimitedCodec::new());
-        let mut count: u64 = 0;
 
         while let Some(message) = transport.next().await {
-            //println!("IO {:?}: ({}) received message from client", addr, count);
             match message {
                 Ok(val) => {
                     let (oneshot_send, oneshot_recv) = oneshot::channel();
@@ -538,13 +532,10 @@ async fn io(
                         channel: oneshot_send,
                     })
                     .await?;
-                    //println!("IO {:?}: ({}) forwarded message", addr, count);
                     recv_tx.send(oneshot_recv).await?;
-                    //println!("IO {:?}: ({}) sent oneshot_recv", addr, count);
                 }
                 Err(err) => return Err(err.into()),
             }
-            count += 1;
         }
 
         Ok(())
@@ -554,7 +545,6 @@ async fn io(
         engine_tx: mpsc::Sender<EngineSignal>,
         engine_rx: broadcast::Receiver<IOSignal>,
         stream: net::UnixStream,
-        addr: &net::unix::SocketAddr,
     ) -> Result<()> {
         let (read_stream, write_stream) = stream.into_split();
 
@@ -563,16 +553,16 @@ async fn io(
         let broadcast_relay_tx = client_tx.clone();
 
         select! {
-            res = client_parser(engine_tx, recv_tx, read_stream, addr) => res?,
-            res = engine_parser(client_rx, write_stream, addr) => res?,
-            res = response_fwd(recv_rx, client_tx, addr) => res?,
+            res = client_parser(engine_tx, recv_tx, read_stream) => res?,
+            res = engine_parser(client_rx, write_stream, ) => res?,
+            res = response_fwd(recv_rx, client_tx, ) => res?,
             res = broadcast_fwd(engine_rx, broadcast_relay_tx) => res?
         }
 
         Ok(())
     }
 
-    match wrapper(tx, rx, stream, &addr).await {
+    match wrapper(tx, rx, stream).await {
         Ok(_) => println!("IO {:?}: terminated without error", addr),
         Err(err) => eprintln!("IO {:?}: {}", addr, err),
     }

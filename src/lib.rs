@@ -57,6 +57,7 @@ pub enum ChallengeType {
     Regionsspezifisch,
     Unspezifisch,
     Zoneable,
+    ZKaff,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
@@ -78,6 +79,7 @@ pub enum ChallengeStatus {
     Rejected,
     Glorious,
     ToSort,
+    Refactor,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +183,7 @@ pub struct CompletedChallenge {
     pub description: String,
     pub points: u64,
     pub time: chrono::NaiveTime,
+    pub id: u64,
     // pub attached_images: Vec<String>,
 }
 
