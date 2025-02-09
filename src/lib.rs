@@ -99,11 +99,10 @@ pub struct ChallengeSet {
     pub id: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, partially::Partial)]
-#[partially(derive(Clone, Debug))]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RawChallenge {
     pub kind: ChallengeType,
-    pub sets: std::collections::HashSet<ChallengeSet>,
+    pub sets: Vec<ChallengeSet>,
     pub status: ChallengeStatus,
     pub title: Option<String>,
     pub description: Option<String>,
@@ -132,6 +131,81 @@ pub struct RawChallenge {
     pub action: Option<ChallengeActionEntry>,
     pub last_edit: chrono::DateTime<chrono::Local>,
     pub id: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum SmartID<T> {
+    ID(u64),
+    Key(T),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct InputChallenge {
+    pub kind: ChallengeType,
+    pub sets: Vec<SmartID<String>>,
+    pub status: ChallengeStatus,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub random_place: Option<RandomPlaceType>,
+    pub place: Option<String>,
+    pub comment: String,
+    pub kaffskala: Option<u8>,
+    pub grade: Option<u8>,
+    pub zone: Vec<SmartID<u64>>,
+    pub bias_sat: f32,
+    pub bias_sun: f32,
+    pub walking_time: u8,
+    pub stationary_time: u8,
+    pub additional_points: i16,
+    pub repetitions: std::ops::Range<u16>,
+    pub points_per_rep: i16,
+    pub station_distance: u16,
+    pub time_to_hb: u8,
+    pub departures: u8,
+    pub dead_end: bool,
+    pub no_disembark: bool,
+    pub fixed: bool,
+    pub in_perimeter_override: Option<bool>,
+    pub translated_titles: std::collections::HashMap<String, String>,
+    pub translated_descriptions: std::collections::HashMap<String, String>,
+    pub action: Option<ChallengeActionEntry>,
+    pub id: Option<u64>,
+}
+
+impl From<RawChallenge> for InputChallenge {
+    fn from(value: RawChallenge) -> Self {
+        Self {
+            zone: value.zone.iter().map(|z| SmartID::ID(z.id)).collect(),
+            sets: value.sets.iter().map(|s| SmartID::ID(s.id)).collect(),
+            kind: value.kind,
+            status: value.status,
+            title: value.title,
+            description: value.description,
+            random_place: value.random_place,
+            place: value.place,
+            comment: value.comment,
+            kaffskala: value.kaffskala,
+            grade: value.grade,
+            bias_sat: value.bias_sat,
+            bias_sun: value.bias_sun,
+            walking_time: value.walking_time,
+            stationary_time: value.stationary_time,
+            additional_points: value.additional_points,
+            repetitions: value.repetitions,
+            points_per_rep: value.points_per_rep,
+            station_distance: value.station_distance,
+            time_to_hb: value.time_to_hb,
+            departures: value.departures,
+            dead_end: value.dead_end,
+            no_disembark: value.no_disembark,
+            fixed: value.fixed,
+            in_perimeter_override: value.in_perimeter_override,
+            translated_titles: value.translated_titles,
+            translated_descriptions: value.translated_descriptions,
+            action: value.action,
+            id: value.id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

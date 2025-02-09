@@ -328,9 +328,9 @@ impl ChallengeEntry {
         Ok(RawChallenge {
             kind: self.kind,
             sets: {
-                let mut sets = std::collections::HashSet::new();
+                let mut sets = Vec::with_capacity(self.sets.len());
                 for s in self.sets.clone() {
-                    sets.insert({
+                    sets.push({
                         let set = challenge_sets.iter().find(|c| c.id == s).ok_or_else(|| {
                             eprintln!("Couldn't find ChallengeSet with id {} in db while making challenge with id {} sendable, maybe it was improperly removed?", s, id);
                             commands::Error::InternalError})?; set.contents.to_sendable(set.id)});
