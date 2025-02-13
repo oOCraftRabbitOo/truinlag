@@ -109,6 +109,7 @@ pub enum EngineAction {
     GenerateTeamChallenges(usize),
     AddChallengeSet(String),
     GetChallengeSets,
+    DeleteAllChallenges,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

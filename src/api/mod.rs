@@ -203,6 +203,23 @@ impl SendConnection {
         Ok(resp_recv.await.map_err(|_| Error::Disconnect)?)
     }
 
+    pub async fn delete_all_challenges(&mut self) -> Result<()> {
+        match self
+            .send(EngineCommand {
+                session: None,
+                action: EngineAction::DeleteAllChallenges,
+            })
+            .await
+        {
+            Ok(response) => match response {
+                ResponseAction::Success => Ok(()),
+                ResponseAction::Error(err) => Err(Error::Truinlag(err)),
+                _ => Err(Error::InvalidSignal),
+            },
+            Err(err) => Err(err),
+        }
+    }
+
     pub async fn get_global_state(&mut self) -> Result<(Vec<GameSession>, Vec<Player>)> {
         match self
             .send(EngineCommand {

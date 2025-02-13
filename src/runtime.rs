@@ -1,5 +1,5 @@
 use crate::{
-    engine,
+    engine::{self, ChallengeEntry, DBEntry},
     error::{self, Result},
 };
 use async_broadcast as broadcast;
@@ -59,6 +59,9 @@ pub enum InternEngineResponse {
 pub enum InternEngineCommand {
     Command(EngineCommand),
     AutoSave,
+    ChallengesCleared {
+        leftovers: Vec<DBEntry<ChallengeEntry>>,
+    },
 }
 
 #[derive(Clone, Debug)]

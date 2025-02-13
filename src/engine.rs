@@ -23,9 +23,20 @@ use partially::Partial;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
-use std::{cmp::min, collections::HashMap, path::Path};
+use std::{
+    cmp::min,
+    collections::HashMap,
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 use strsim::normalized_damerau_levenshtein as strcmp;
-use tokio::time::{sleep, Duration};
+use tokio::{
+    sync::Notify,
+    time::{sleep, Duration},
+};
 use truinlag::{
     commands::{BroadcastAction, EngineAction, EngineResponse, ResponseAction},
     *,
@@ -262,7 +273,7 @@ impl ChallengeSetEntry {
 
 #[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "challenge", views = [UnspecificChallengeEntries, SpecificChallengeEntries, GoodChallengeEntries])]
-struct ChallengeEntry {
+pub struct ChallengeEntry {
     kind: ChallengeType,
     sets: Vec<u64>,
     status: ChallengeStatus,
@@ -328,9 +339,9 @@ impl ChallengeEntry {
         Ok(RawChallenge {
             kind: self.kind,
             sets: {
-                let mut sets = std::collections::HashSet::new();
+                let mut sets = Vec::new();
                 for s in self.sets.clone() {
-                    sets.insert({
+                    sets.push({
                         let set = challenge_sets.iter().find(|c| c.id == s).ok_or_else(|| {
                             eprintln!("Couldn't find ChallengeSet with id {} in db while making challenge with id {} sendable, maybe it was improperly removed?", s, id);
                             commands::Error::InternalError})?; set.contents.to_sendable(set.id)});
@@ -2048,12 +2059,13 @@ impl Session {
             AddRawChallenge(_) => Error(SessionSupplied).into(),
             AddChallengeSet(_) => Error(SessionSupplied).into(),
             GetChallengeSets => Error(SessionSupplied).into(),
+            DeleteAllChallenges => Error(SessionSupplied).into(),
         }
     }
 }
 
 #[derive(Clone, Debug)]
-struct DBEntry<T>
+pub struct DBEntry<T>
 where
     T: SerializedCollection<Contents = T, PrimaryKey = u64>,
 {
@@ -2074,6 +2086,9 @@ pub struct Engine {
 
     pictures: Vec<Header>,
     past_games: Vec<Header>,
+
+    autosave_in_progress: Arc<AtomicBool>,
+    autosave_done: Arc<Notify>,
 }
 
 impl Engine {
@@ -2121,6 +2136,8 @@ impl Engine {
             players,
             past_games,
             pictures,
+            autosave_in_progress: Arc::new(AtomicBool::new(false)),
+            autosave_done: Arc::new(Notify::new()),
         }
     }
 
@@ -2222,6 +2239,39 @@ impl Engine {
                             let entry: ChallengeEntry = challenge.clone().into();
                             add_into(&mut self.challenges, entry);
                             Success.into()
+                        }
+                        DeleteAllChallenges => {
+                            let db = self.db.clone();
+                            let challenges = std::mem::take(&mut self.challenges);
+                            let autosave_in_progress = self.autosave_in_progress.clone();
+                            let autosave_done = self.autosave_done.clone();
+                            InternEngineResponse::DelayedLoopback(tokio::spawn(async move {
+                                if autosave_in_progress.load(Ordering::Relaxed) {
+                                    autosave_done.notified().await;
+                                }
+                                let query = ChallengeEntry::all_async(&db.to_async()).await;
+                                match query {
+                                    Ok(all) => {
+                                        let mut transaction = Transaction::new();
+                                        for entry in all {
+                                            entry.delete_in_transaction(&mut transaction).unwrap();
+                                        }
+                                        match transaction.apply_async(&db.to_async()).await {
+                                            Ok(_) => {
+                                                InternEngineCommand::ChallengesCleared { leftovers: Vec::with_capacity(0) }
+                                            }
+                                            Err(err) => {
+                                                eprintln!("Engine: coudln't clear challenges from db: {}", err);
+                                                InternEngineCommand::ChallengesCleared { leftovers: challenges }
+                                            }
+                                        }
+                                    }
+                                    Err(err) => {
+                                        eprintln!("Engine: couldn't retrieve challenges from db while clearing challenges: {}", err);
+                                        InternEngineCommand::ChallengesCleared { leftovers: challenges }
+                                    }
+                                }
+                            })).into()
                         }
                         GetPlayerByPassphrase(passphrase) => {
                             //println!("Engine: getting player by passphrase {}", passphrase);
@@ -2417,6 +2467,15 @@ impl Engine {
                 }
             }
 
+            InternEngineCommand::ChallengesCleared { leftovers } => {
+                if leftovers.is_empty() {
+                    Success.into()
+                } else {
+                    self.challenges = leftovers;
+                    Error(InternalError).into()
+                }
+            }
+
             InternEngineCommand::AutoSave => {
                 fn vec_overwrite_in_transaction<T>(
                     entries: Vec<DBEntry<T>>,
@@ -2444,6 +2503,7 @@ impl Engine {
                     ret
                 }
                 if self.changes_since_save {
+                    self.autosave_in_progress.store(true, Ordering::Relaxed);
                     let players = self.players.clone();
                     let db = self.db.clone();
                     let sessions = self.sessions.clone();
@@ -2452,6 +2512,9 @@ impl Engine {
                     let zones = self.zones.clone();
                     self.changes_since_save = false;
 
+                    let autosave_in_progress = self.autosave_in_progress.clone();
+                    let autosave_done = self.autosave_done.clone();
+
                     InternEngineResponsePackage {
                         response: Success.into(),
                         runtime_requests: Some(vec![RuntimeRequest::RawLoopback(tokio::spawn(
@@ -2459,14 +2522,14 @@ impl Engine {
                                 println!("Engine Autosave: starting autosave");
                                 let now = tokio::time::Instant::now();
                                 let mut transaction = Transaction::new();
-                                let _ = vec_overwrite_in_transaction(players, &mut transaction);
-                                let _ = vec_overwrite_in_transaction(sessions, &mut transaction);
-                                let _ = vec_overwrite_in_transaction(challenges, &mut transaction);
-                                let _ =
-                                    vec_overwrite_in_transaction(challenge_sets, &mut transaction);
-                                let _ = vec_overwrite_in_transaction(zones, &mut transaction);
+                                vec_overwrite_in_transaction(players, &mut transaction).unwrap();
+                                vec_overwrite_in_transaction(sessions, &mut transaction).unwrap();
+                                vec_overwrite_in_transaction(challenges, &mut transaction).unwrap();
+                                vec_overwrite_in_transaction(challenge_sets, &mut transaction)
+                                    .unwrap();
+                                vec_overwrite_in_transaction(zones, &mut transaction).unwrap();
 
-                                match transaction.apply(&db) {
+                                match transaction.apply_async(&db.to_async()).await {
                                     Ok(yay) => println!(
                                         "Engine Autosave: autosave succeeded in {} ms: {:?}",
                                         now.elapsed().as_millis(),
@@ -2478,6 +2541,8 @@ impl Engine {
                                     }
                                 }
 
+                                autosave_in_progress.store(false, Ordering::Relaxed);
+                                autosave_done.notify_waiters();
                                 sleep(Duration::from_secs(5)).await;
                                 InternEngineCommand::AutoSave
                             },

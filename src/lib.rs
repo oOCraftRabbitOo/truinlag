@@ -93,7 +93,7 @@ pub enum ChallengeActionEntry {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChallengeSet {
     pub name: String,
     pub id: u64,
@@ -103,7 +103,7 @@ pub struct ChallengeSet {
 #[partially(derive(Clone, Debug))]
 pub struct RawChallenge {
     pub kind: ChallengeType,
-    pub sets: std::collections::HashSet<ChallengeSet>,
+    pub sets: Vec<ChallengeSet>,
     pub status: ChallengeStatus,
     pub title: Option<String>,
     pub description: Option<String>,
@@ -131,6 +131,76 @@ pub struct RawChallenge {
     pub translated_descriptions: std::collections::HashMap<String, String>,
     pub action: Option<ChallengeActionEntry>,
     pub last_edit: chrono::DateTime<chrono::Local>,
+    pub id: Option<u64>,
+}
+
+impl From<RawChallenge> for InputChallenge {
+    fn from(challenge: RawChallenge) -> Self {
+        InputChallenge {
+            kind: challenge.kind,
+            sets: challenge.sets.iter().map(|s| s.id).collect(),
+            status: challenge.status,
+            title: challenge.title,
+            description: challenge.description,
+            random_place: challenge.random_place,
+            place: challenge.place,
+            comment: challenge.comment,
+            kaffskala: challenge.kaffskala,
+            grade: challenge.grade,
+            zone: challenge.zone.iter().map(|z| z.id).collect(),
+            bias_sat: challenge.bias_sat,
+            bias_sun: challenge.bias_sun,
+            walking_time: challenge.walking_time,
+            stationary_time: challenge.stationary_time,
+            additional_points: challenge.additional_points,
+            repetitions: challenge.repetitions,
+            points_per_rep: challenge.points_per_rep,
+            station_distance: challenge.station_distance,
+            time_to_hb: challenge.time_to_hb,
+            departures: challenge.departures,
+            dead_end: challenge.dead_end,
+            no_disembark: challenge.no_disembark,
+            fixed: challenge.fixed,
+            in_perimeter_override: challenge.in_perimeter_override,
+            translated_titles: challenge.translated_titles,
+            translated_descriptions: challenge.translated_descriptions,
+            action: challenge.action,
+            id: challenge.id,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, partially::Partial)]
+#[partially(derive(Clone, Debug))]
+pub struct InputChallenge {
+    pub kind: ChallengeType,
+    pub sets: Vec<u64>,
+    pub status: ChallengeStatus,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub random_place: Option<RandomPlaceType>,
+    pub place: Option<String>,
+    pub comment: String,
+    pub kaffskala: Option<u8>,
+    pub grade: Option<u8>,
+    pub zone: Vec<u64>,
+    pub bias_sat: f32,
+    pub bias_sun: f32,
+    pub walking_time: u8,
+    pub stationary_time: u8,
+    pub additional_points: i16,
+    pub repetitions: std::ops::Range<u16>,
+    pub points_per_rep: i16,
+    pub station_distance: u16,
+    pub time_to_hb: u8,
+    pub departures: u8,
+    pub dead_end: bool,
+    pub no_disembark: bool,
+    pub fixed: bool,
+    pub in_perimeter_override: Option<bool>,
+    pub translated_titles: std::collections::HashMap<String, String>,
+    pub translated_descriptions: std::collections::HashMap<String, String>,
+    pub action: Option<ChallengeActionEntry>,
     pub id: Option<u64>,
 }
 
