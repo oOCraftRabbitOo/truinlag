@@ -63,7 +63,7 @@ pub enum ChallengeType {
 }
 
 impl FromStr for ChallengeType {
-    type Err = ();
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().replace("_", "").as_str() {
@@ -73,7 +73,7 @@ impl FromStr for ChallengeType {
             "unspezifisch" => Ok(Self::Unspezifisch),
             "zoneable" => Ok(Self::Zoneable),
             "zkaff" => Ok(Self::ZKaff),
-            _ => Err(()),
+            _ => Err(format!("failed parsing \"{}\" as ChallengeType", s)),
         }
     }
 }
@@ -101,7 +101,7 @@ pub enum ChallengeStatus {
 }
 
 impl FromStr for ChallengeStatus {
-    type Err = ();
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().replace("_", "").as_str() {
@@ -111,7 +111,7 @@ impl FromStr for ChallengeStatus {
             "glorious" => Ok(Self::Glorious),
             "tosort" => Ok(Self::ToSort),
             "refactor" => Ok(Self::Refactor),
-            _ => Err(()),
+            _ => Err(format!("failed parsing \"{}\" as ChallengeStatus", s)),
         }
     }
 }
