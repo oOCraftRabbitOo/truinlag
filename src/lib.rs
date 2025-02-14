@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use image::{DynamicImage, ImageFormat};
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +62,22 @@ pub enum ChallengeType {
     ZKaff,
 }
 
+impl FromStr for ChallengeType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace("_", "").as_str() {
+            "kaff" => Ok(Self::Kaff),
+            "ortsspezifisch" => Ok(Self::Ortsspezifisch),
+            "regionsspezifisch" => Ok(Self::Regionsspezifisch),
+            "unspezifisch" => Ok(Self::Unspezifisch),
+            "zoneable" => Ok(Self::Zoneable),
+            "zkaff" => Ok(Self::ZKaff),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub enum TeamRole {
     Runner,
@@ -80,6 +98,22 @@ pub enum ChallengeStatus {
     Glorious,
     ToSort,
     Refactor,
+}
+
+impl FromStr for ChallengeStatus {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace("_", "").as_str() {
+            "approved" => Ok(Self::Approved),
+            "edited" => Ok(Self::Edited),
+            "rejected" => Ok(Self::Rejected),
+            "glorious" => Ok(Self::Glorious),
+            "tosort" => Ok(Self::ToSort),
+            "refactor" => Ok(Self::Refactor),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
