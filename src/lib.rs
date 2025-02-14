@@ -1,7 +1,6 @@
-use std::str::FromStr;
-
 use image::{DynamicImage, ImageFormat};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 pub mod api;
 pub mod commands;
@@ -63,7 +62,7 @@ pub enum ChallengeType {
 }
 
 impl FromStr for ChallengeType {
-    type Err = String;
+    type Err = TextError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().replace("_", "").as_str() {
@@ -73,7 +72,10 @@ impl FromStr for ChallengeType {
             "unspezifisch" => Ok(Self::Unspezifisch),
             "zoneable" => Ok(Self::Zoneable),
             "zkaff" => Ok(Self::ZKaff),
-            _ => Err(format!("failed parsing \"{}\" as ChallengeType", s)),
+            _ => Err(TextError(format!(
+                "failed parsing \"{}\" as ChallengeType",
+                s
+            ))),
         }
     }
 }
@@ -100,8 +102,19 @@ pub enum ChallengeStatus {
     Refactor,
 }
 
+#[derive(Debug)]
+pub struct TextError(String);
+
+impl std::fmt::Display for TextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for TextError {}
+
 impl FromStr for ChallengeStatus {
-    type Err = String;
+    type Err = TextError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().replace("_", "").as_str() {
@@ -111,7 +124,10 @@ impl FromStr for ChallengeStatus {
             "glorious" => Ok(Self::Glorious),
             "tosort" => Ok(Self::ToSort),
             "refactor" => Ok(Self::Refactor),
-            _ => Err(format!("failed parsing \"{}\" as ChallengeStatus", s)),
+            _ => Err(TextError(format!(
+                "failed parsing \"{}\" as ChallengeStatus",
+                s
+            ))),
         }
     }
 }
