@@ -113,6 +113,12 @@ impl std::fmt::Display for TextError {
 
 impl std::error::Error for TextError {}
 
+impl From<&str> for TextError {
+    fn from(value: &str) -> Self {
+        Self(value.into())
+    }
+}
+
 impl FromStr for ChallengeStatus {
     type Err = TextError;
 
@@ -252,6 +258,58 @@ pub struct InputChallenge {
     pub translated_descriptions: std::collections::HashMap<String, String>,
     pub action: Option<ChallengeActionEntry>,
     pub id: Option<u64>,
+}
+
+impl InputChallenge {
+    pub fn check_validity(&self) -> Result<(), TextError> {
+        if matches!(self.status, ChallengeStatus::ToSort) {
+            return Ok(());
+        }
+        if self.sets.is_empty() {
+            return Err("has no challenge sets".into());
+        }
+        use ChallengeType::*;
+        if matches!(self.kind, Kaff | ZKaff) && self.place.is_none() {
+            return Err(TextError(String::from(
+                "is Kaff or ZKaff, but doesn't have place",
+            )));
+        };
+        if matches!(self.kind, Kaff | Ortsspezifisch) {
+            if self.kaffskala.is_none() {
+                return Err("is Kaff or Ortsspezifisch, but doesn't have kaffskala".into());
+            }
+            if self.grade.is_none() {
+                return Err("is Kaff or Ortsspezifisch, but doesn't have grade".into());
+            }
+            if self.zone.is_empty() {
+                return Err("is Kaff or Ortsspezifisch, but doesn't have zone".into());
+            }
+        }
+        if matches!(self.kind, ZKaff) {
+            if self.station_distance == 0 {
+                return Err("is ZKaff, but station distance is 0".into());
+            }
+            if self.time_to_hb == 0 {
+                return Err("is ZKaff, but time to HB is 0".into());
+            }
+        }
+        if !matches!(self.kind, Kaff | ZKaff) {
+            if self.description.is_none() {
+                return Err("is neither Kaff nor ZKaff, but has no description".into());
+            }
+            if self.title.is_none() {
+                return Err("is neither Kaff nor ZKaff, but has no title".into());
+            }
+        }
+        if matches!(self.kind, ZKaff | Kaff | Ortsspezifisch) && self.random_place.is_some() {
+            return Err("is ortsspezifisch, but has random place".into());
+        }
+        Ok(())
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.check_validity().is_ok()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
