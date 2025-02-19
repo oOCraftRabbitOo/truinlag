@@ -2060,6 +2060,20 @@ impl Session {
             AddChallengeSet(_) => Error(SessionSupplied).into(),
             GetChallengeSets => Error(SessionSupplied).into(),
             DeleteAllChallenges => Error(SessionSupplied).into(),
+            GetAllZones => Error(SessionSupplied).into(),
+            AddZone {
+                zone: _,
+                num_conn_zones: _,
+                num_connections: _,
+                train_through: _,
+                mongus: _,
+                s_bahn_zone: _,
+            } => Error(SessionSupplied).into(),
+            AddMinutesTo {
+                from_zone: _,
+                to_zone: _,
+                minutes: _,
+            } => Error(SessionSupplied).into(),
         }
     }
 }
@@ -2217,6 +2231,25 @@ impl Engine {
                         None => Error(NotFound).into()
                     }
                     None => match command.action {
+                        GetAllZones => SendZones(self.zones.iter().map(|z| z.contents.to_sendable(z.id)).collect()).into(),
+                        AddZone { zone, num_conn_zones, num_connections, train_through, mongus, s_bahn_zone } => {
+                            add_into(&mut self.zones, ZoneEntry { zone, num_conn_zones, num_connections, train_through, mongus, s_bahn_zone, minutes_to: HashMap::new() });
+                            Success.into()
+                        }
+                        AddMinutesTo { from_zone, to_zone, minutes } => {
+                            if !self.zones.iter().any(|z| z.id == to_zone) {
+                                Error(NotFound).into()
+                            }
+                            else {
+                                match self.zones.iter_mut().find(|z| z.id == from_zone) {
+                                    None => Error(NotFound).into(),
+                                    Some(entry) => {
+                                        entry.contents.minutes_to.insert(to_zone, minutes);
+                                        Success.into()
+                                    }
+                                }
+                            }
+                        }
                         GetRawChallenges => SendRawChallenges(self.challenges.iter().filter_map(|c| c.contents.to_sendable(c.id, &self.challenge_sets, &self.zones).ok()).collect()).into(),
                         SetRawChallenge(challenge) => match challenge.id {
                             Some(id) => {

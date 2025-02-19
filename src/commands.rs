@@ -110,6 +110,20 @@ pub enum EngineAction {
     AddChallengeSet(String),
     GetChallengeSets,
     DeleteAllChallenges,
+    GetAllZones,
+    AddZone {
+        zone: u64,
+        num_conn_zones: u64,
+        num_connections: u64,
+        train_through: bool,
+        mongus: bool,
+        s_bahn_zone: bool,
+    },
+    AddMinutesTo {
+        from_zone: u64,
+        to_zone: u64,
+        minutes: u64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -128,6 +142,7 @@ pub enum ResponseAction {
     },
     Success,
     SendChallengeSets(Vec<ChallengeSet>),
+    SendZones(Vec<Zone>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -176,13 +191,14 @@ pub enum Error {
     InternalError,     // Some sort of internal database error
     NotImplemented,    // Feature is not yet implemented
     BadData(String),
+    TextError(String), // Some other kind of error with a custom text
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoSessionSupplied => write!(f, "A sesssion specific command like 'addTeam' was called without a session being supplied."),
-            Self::SessionSupplied => write!(f, "A session unspecific command like 'addPlayer' was called with a session."),
+            Self::NoSessionSupplied => write!(f, "A sesssion specific command (like 'addTeam') was called without a session being supplied."),
+            Self::SessionSupplied => write!(f, "A session unspecific command (like 'addPlayer') was called with a session."),
             Self::NotFound => write!(f, "Not Found"),
             Self::TeamExists(team) => write!(f, "Team {} already exists", team),
             Self::AlreadyExists => write!(f, "Already exists"),
@@ -192,6 +208,7 @@ impl std::fmt::Display for Error {
             Self::InternalError => write!(f, "There was a truinlag-internal error"),
             Self::NotImplemented => write!(f, "Not yet implemented"),
             Self::BadData(text) => write!(f, "bad data: {}", text),
+            Self::TextError(text) => write!(f, "{}", text),
         }
     }
 }

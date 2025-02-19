@@ -26,6 +26,7 @@ struct ResponseInfo {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum DistributorMessage {
     Command(ClientCommand),
     ResponseInfo(ResponseInfo),
@@ -200,7 +201,24 @@ impl SendConnection {
             .send(package)
             .await
             .map_err(|_| Error::Disconnect)?;
-        Ok(resp_recv.await.map_err(|_| Error::Disconnect)?)
+        resp_recv.await.map_err(|_| Error::Disconnect)
+    }
+
+    pub async fn get_zones(&mut self) -> Result<Vec<Zone>> {
+        match self
+            .send(EngineCommand {
+                session: None,
+                action: EngineAction::DeleteAllChallenges,
+            })
+            .await
+        {
+            Ok(response) => match response {
+                ResponseAction::SendZones(zones) => Ok(zones),
+                ResponseAction::Error(err) => Err(Error::Truinlag(err)),
+                _ => Err(Error::InvalidSignal),
+            },
+            Err(err) => Err(err),
+        }
     }
 
     pub async fn delete_all_challenges(&mut self) -> Result<()> {
@@ -251,7 +269,7 @@ impl SendConnection {
     }
 
     pub async fn set_raw_challenge(&mut self, challenge: RawChallenge) -> Result<()> {
-        if let None = challenge.id {
+        if challenge.id.is_none() {
             return Err(Error::InvalidSignal);
         }
         match self
@@ -268,7 +286,7 @@ impl SendConnection {
     }
 
     pub async fn add_raw_challenge(&mut self, challenge: RawChallenge) -> Result<()> {
-        if let Some(_) = challenge.id {
+        if challenge.id.is_some() {
             return Err(Error::InvalidSignal);
         }
         match self
@@ -332,7 +350,7 @@ impl RecvConnection {
         let inner_recv = broadcast_recv.clone();
         let eater_handle = tokio::spawn(async move {
             let mut inner_recv = inner_recv.lock().await;
-            while let Some(_) = inner_recv.recv().await {}
+            while inner_recv.recv().await.is_some() {}
         });
         InactiveRecvConnection {
             broadcast_recv,
