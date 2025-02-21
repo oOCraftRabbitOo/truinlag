@@ -2233,8 +2233,12 @@ impl Engine {
                     None => match command.action {
                         GetAllZones => SendZones(self.zones.iter().map(|z| z.contents.to_sendable(z.id)).collect()).into(),
                         AddZone { zone, num_conn_zones, num_connections, train_through, mongus, s_bahn_zone } => {
-                            add_into(&mut self.zones, ZoneEntry { zone, num_conn_zones, num_connections, train_through, mongus, s_bahn_zone, minutes_to: HashMap::new() });
-                            Success.into()
+                            if self.zones.iter().any(|z| z.contents.zone == zone) {
+                                Error(AlreadyExists).into()
+                            } else {
+                                add_into(&mut self.zones, ZoneEntry { zone, num_conn_zones, num_connections, train_through, mongus, s_bahn_zone, minutes_to: HashMap::new() });
+                                Success.into()
+                            }
                         }
                         AddMinutesTo { from_zone, to_zone, minutes } => {
                             if !self.zones.iter().any(|z| z.id == to_zone) {
