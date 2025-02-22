@@ -209,7 +209,7 @@ impl SendConnection {
         match self
             .send(EngineCommand {
                 session: None,
-                action: EngineAction::DeleteAllChallenges,
+                action: EngineAction::GetAllZones,
             })
             .await
         {
