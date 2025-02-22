@@ -322,10 +322,16 @@ async fn engine(
                     RuntimeRequest::RawLoopback(handle) => {
                         let sender = mpsc_sender.clone();
                         handles.push(tokio::spawn(async move {
-                            sender
-                                .send(EngineSignal::RawLoopbackCommand(handle.await.unwrap()))
-                                .await
-                                .unwrap();
+                            match handle.await {
+                                Ok(command) => sender
+                                    .send(EngineSignal::RawLoopbackCommand(command))
+                                    .await
+                                    .unwrap(),
+                                Err(err) => {
+                                    eprintln!("Runtime: there was a problem executing raw loopback, sending shutdown signal: {}", err);
+                                    sender.send(EngineSignal::Shutdown).await.unwrap()
+                                }
+                            }
                         }));
                     }
                 }
@@ -362,14 +368,22 @@ async fn engine(
             }
             InternEngineResponse::DelayedLoopback(handle) => {
                 handles.push(tokio::spawn(async move {
-                    mpsc_sender
-                        .send(EngineSignal::LoopbackCommand {
-                            command: handle.await.unwrap(),
-                            id,
-                            channel,
-                        })
-                        .await
-                        .unwrap();
+                    match handle.await {
+                        Ok(command) => {
+                            mpsc_sender
+                                .send(EngineSignal::LoopbackCommand {
+                                    command,
+                                    id,
+                                    channel,
+                                })
+                                .await
+                                .unwrap();
+                        }
+                        Err(err) => {
+                            eprintln!("Runtime: there was an error executing delayed loopback, sending shutdown: {}", err);
+                            mpsc_sender.send(EngineSignal::Shutdown).await.unwrap();
+                        }
+                    }
                 }));
             }
         }

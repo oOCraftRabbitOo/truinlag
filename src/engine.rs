@@ -10,7 +10,7 @@ use bonsaidb::{
             Collection, CollectionMapReduce, DefaultSerialization, ReduceResult, Schema,
             SerializedCollection, View, ViewMapResult, ViewMappedValue, ViewSchema,
         },
-        transaction::Transaction,
+        transaction::{self, Transaction},
     },
     local::{
         config::{self, Builder},
@@ -193,7 +193,7 @@ impl Default for Config {
 }
 
 #[derive(Schema)]
-#[schema(name="engine", collections=[Session, PlayerEntry, ChallengeEntry, ZoneEntry, PastGame, PictureEntry])]
+#[schema(name="engine", collections=[Session, PlayerEntry, ChallengeEntry, ZoneEntry, PastGame, PictureEntry, ChallengeSetEntry])]
 struct EngineSchema {}
 
 #[derive(Debug, Collection, Serialize, Deserialize, Clone)]
@@ -257,7 +257,7 @@ impl PlayerEntry {
 }
 
 #[derive(Debug, Clone, Collection, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[collection(name = "set")]
+#[collection(name = "challenge set")]
 struct ChallengeSetEntry {
     name: String,
 }
@@ -528,11 +528,11 @@ impl ChallengeEntry {
     }
 }
 
-impl From<RawChallenge> for ChallengeEntry {
-    fn from(v: RawChallenge) -> Self {
+impl From<InputChallenge> for ChallengeEntry {
+    fn from(v: InputChallenge) -> Self {
         ChallengeEntry {
             kind: v.kind,
-            sets: v.sets.iter().map(|s| s.id).collect(),
+            sets: v.sets,
             status: v.status,
             title: v.title,
             description: v.description,
@@ -541,7 +541,7 @@ impl From<RawChallenge> for ChallengeEntry {
             comment: v.comment,
             kaffskala: v.kaffskala,
             grade: v.grade,
-            zone: v.zone.iter().map(|z| z.id).collect(),
+            zone: v.zone,
             bias_sat: v.bias_sat,
             bias_sun: v.bias_sun,
             walking_time: v.walking_time,
@@ -559,7 +559,7 @@ impl From<RawChallenge> for ChallengeEntry {
             translated_titles: v.translated_titles,
             translated_descriptions: v.translated_descriptions,
             action: v.action,
-            last_edit: v.last_edit,
+            last_edit: chrono::Local::now(),
         }
     }
 }
@@ -2563,10 +2563,9 @@ impl Engine {
                                 vec_overwrite_in_transaction(zones, &mut transaction).unwrap();
 
                                 match transaction.apply_async(&db.to_async()).await {
-                                    Ok(yay) => println!(
-                                        "Engine Autosave: autosave succeeded in {} ms: {:?}",
+                                    Ok(_) => println!(
+                                        "Engine Autosave: autosave succeeded in {} ms",
                                         now.elapsed().as_millis(),
-                                        yay
                                     ),
                                     Err(err) => {
                                         eprintln!("Engine Autosave: AUTOSAVE FAILED HIGH ALERT YOU ARE ALL FUCKED NOW (in {} ms): {}", now.elapsed().as_millis(), err);
@@ -2576,15 +2575,14 @@ impl Engine {
 
                                 autosave_in_progress.store(false, Ordering::Relaxed);
                                 autosave_done.notify_waiters();
-                                sleep(Duration::from_secs(5)).await;
+                                sleep(Duration::from_secs(3)).await;
                                 InternEngineCommand::AutoSave
                             },
                         ))]),
                     }
                 } else {
-                    println!("Engine: Autosave requested, but no changes since last save");
                     RuntimeRequest::CreateTimer {
-                        duration: Duration::from_secs(10),
+                        duration: Duration::from_secs(3),
                         payload: InternEngineCommand::AutoSave,
                     }
                     .into()

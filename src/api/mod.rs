@@ -269,7 +269,11 @@ impl SendConnection {
         }
     }
 
-    pub async fn set_raw_challenge(&mut self, challenge: RawChallenge) -> Result<()> {
+    pub async fn set_raw_challenge<C>(&mut self, challenge: C) -> Result<()>
+    where
+        C: Into<InputChallenge>,
+    {
+        let challenge = challenge.into();
         if challenge.id.is_none() {
             return Err(Error::InvalidSignal("Provided challenge has no ID".into()));
         }
@@ -286,7 +290,11 @@ impl SendConnection {
         }
     }
 
-    pub async fn add_raw_challenge(&mut self, challenge: RawChallenge) -> Result<()> {
+    pub async fn add_raw_challenge<C>(&mut self, challenge: C) -> Result<()>
+    where
+        C: Into<InputChallenge>,
+    {
+        let challenge = challenge.into();
         if challenge.id.is_some() {
             return Err(Error::InvalidSignal(
                 "supplied challenge must have an ID".into(),
