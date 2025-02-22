@@ -81,8 +81,9 @@ where
         while let Some(message) = transport.next().await {
             match message {
                 Ok(message) => {
-                    let command: ClientCommand =
-                        bincode::deserialize(&message).map_err(|_err| Error::InvalidSignal)?;
+                    let command: ClientCommand = bincode::deserialize(&message).map_err(|err| {
+                        Error::InvalidSignal(format!("deserialisation error: {}", err))
+                    })?;
                     command_send
                         .send(DistributorMessage::Command(command))
                         .await
@@ -215,7 +216,7 @@ impl SendConnection {
             Ok(response) => match response {
                 ResponseAction::SendZones(zones) => Ok(zones),
                 ResponseAction::Error(err) => Err(Error::Truinlag(err)),
-                _ => Err(Error::InvalidSignal),
+                other => Err(Error::InvalidSignal(format!("{:?}", other))),
             },
             Err(err) => Err(err),
         }
@@ -232,7 +233,7 @@ impl SendConnection {
             Ok(response) => match response {
                 ResponseAction::Success => Ok(()),
                 ResponseAction::Error(err) => Err(Error::Truinlag(err)),
-                _ => Err(Error::InvalidSignal),
+                other => Err(Error::InvalidSignal(format!("{:?}", other))),
             },
             Err(err) => Err(err),
         }
@@ -248,7 +249,7 @@ impl SendConnection {
         {
             Ok(thing) => match thing {
                 ResponseAction::SendGlobalState { sessions, players } => Ok((sessions, players)),
-                _ => Err(Error::InvalidSignal),
+                other => Err(Error::InvalidSignal(format!("{:?}", other))),
             },
             Err(err) => Err(err),
         }
@@ -264,13 +265,13 @@ impl SendConnection {
         {
             ResponseAction::Error(err) => Err(Error::Truinlag(err)),
             ResponseAction::SendRawChallenges(challenges) => Ok(challenges),
-            _ => Err(Error::InvalidSignal),
+            other => Err(Error::InvalidSignal(format!("{:?}", other))),
         }
     }
 
     pub async fn set_raw_challenge(&mut self, challenge: RawChallenge) -> Result<()> {
         if challenge.id.is_none() {
-            return Err(Error::InvalidSignal);
+            return Err(Error::InvalidSignal("Provided challenge has no ID".into()));
         }
         match self
             .send(EngineCommand {
@@ -281,13 +282,15 @@ impl SendConnection {
         {
             ResponseAction::Error(err) => Err(Error::Truinlag(err)),
             ResponseAction::Success => Ok(()),
-            _ => Err(Error::InvalidSignal),
+            other => Err(Error::InvalidSignal(format!("{:?}", other))),
         }
     }
 
     pub async fn add_raw_challenge(&mut self, challenge: RawChallenge) -> Result<()> {
         if challenge.id.is_some() {
-            return Err(Error::InvalidSignal);
+            return Err(Error::InvalidSignal(
+                "supplied challenge must have an ID".into(),
+            ));
         }
         match self
             .send(EngineCommand {
@@ -298,7 +301,7 @@ impl SendConnection {
         {
             ResponseAction::Error(err) => Err(Error::Truinlag(err)),
             ResponseAction::Success => Ok(()),
-            _ => Err(Error::InvalidSignal),
+            other => Err(Error::InvalidSignal(format!("{:?}", other))),
         }
     }
 
@@ -312,7 +315,7 @@ impl SendConnection {
         {
             ResponseAction::Error(err) => Err(Error::Truinlag(err)),
             ResponseAction::Success => Ok(()),
-            _ => Err(Error::InvalidSignal),
+            other => Err(Error::InvalidSignal(format!("{:?}", other))),
         }
     }
 
@@ -326,7 +329,7 @@ impl SendConnection {
         {
             ResponseAction::Error(err) => Err(Error::Truinlag(err)),
             ResponseAction::SendChallengeSets(sets) => Ok(sets),
-            _ => Err(Error::InvalidSignal),
+            other => Err(Error::InvalidSignal(format!("{:?}", other))),
         }
     }
 }

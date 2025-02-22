@@ -3,7 +3,7 @@ use crate::commands;
 #[derive(Debug)]
 pub enum Error {
     Disconnect,
-    InvalidSignal,
+    InvalidSignal(String),
     Connection(std::io::Error),
     Truinlag(commands::Error),
 }
@@ -14,10 +14,9 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Error::Disconnect => write!(f, "disconnected from the Truinlag engine"),
-            Error::InvalidSignal => write!(
-                f,
-                "received invalid signal from engine (not able to deserialise to ClientCommand)"
-            ),
+            Error::InvalidSignal(text) => {
+                write!(f, "received invalid signal from engine: {}", text)
+            }
             Error::Connection(err) => write!(f, "couldn't connect: {}", err),
             Error::Truinlag(err) => write!(f, "cruinlag returned an error: {}", err),
         }
