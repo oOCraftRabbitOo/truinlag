@@ -2,7 +2,6 @@ use crate::runtime::{EngineSignal, IOSignal};
 use async_broadcast as broadcast;
 use std::io;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinError;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -13,18 +12,11 @@ pub enum Error {
     Reqwest(reqwest::Error),
     Bincode(bincode::Error),
     BroadcastRecv(broadcast::RecvError),
-    BroadcastSend(broadcast::SendError<IOSignal>),
+    BroadcastSend(Box<broadcast::SendError<IOSignal>>),
     MpscSend(mpsc::error::SendError<EngineSignal>),
-    ClientCommandSend(mpsc::error::SendError<IOSignal>),
+    ClientCommandSend(Box<mpsc::error::SendError<IOSignal>>),
     MpscOneshotRecvSend(mpsc::error::SendError<oneshot::Receiver<IOSignal>>),
     OneshotRecv(oneshot::error::RecvError),
-    ResponseSend,
-    Join(JoinError),
-    Mutex,
-    PlayerNot {
-        player_name: String,
-        team_name: String,
-    },
     IDontCareAnymore,
 }
 
@@ -38,19 +30,10 @@ impl std::fmt::Display for Error {
             Error::ClientCommandSend(err) => write!(f, "mpsc send error: {}", err),
             Error::OneshotRecv(err) => write!(f, "Couldn't recv message from engine: {}", err),
             Error::BroadcastSend(err) => write!(f, "Couldn't send broadcast: {}", err),
-            Error::ResponseSend => write!(
-                f,
-                "The engine task couldn't send a response throught the oneshot channel"
-            ),
             Error::MpscOneshotRecvSend(err) => {
                 write!(f, "Couldn't send the oneshot_recv: {}", err)
             }
-            Error::Join(err) => write!(f, "error joining task: {}", err),
             Error::IDontCareAnymore => write!(f, "a miscellaneous error occured"),
-            Error::Mutex => write!(
-                f,
-                "Error acquiring mutex lock, other thread might have panicked"
-            ),
             Error::Bincode(err) => write!(
                 f,
                 "ipc en/decode error, client might be incompatible: {}",
@@ -59,14 +42,6 @@ impl std::fmt::Display for Error {
             Error::BroadcastRecv(err) => {
                 write!(f, "error receiving message from engine {}", err)
             }
-            Error::PlayerNot {
-                player_name,
-                team_name,
-            } => write!(
-                f,
-                "Player {} listed in team {} but couldn't be found",
-                player_name, team_name
-            ),
         }
     }
 }
@@ -115,7 +90,7 @@ impl From<mpsc::error::SendError<EngineSignal>> for Error {
 
 impl From<mpsc::error::SendError<IOSignal>> for Error {
     fn from(error: mpsc::error::SendError<IOSignal>) -> Self {
-        Error::ClientCommandSend(error)
+        Error::ClientCommandSend(Box::new(error))
     }
 }
 
@@ -133,7 +108,7 @@ impl From<oneshot::error::RecvError> for Error {
 
 impl From<broadcast::SendError<IOSignal>> for Error {
     fn from(error: broadcast::SendError<IOSignal>) -> Self {
-        Error::BroadcastSend(error)
+        Error::BroadcastSend(Box::new(error))
     }
 }
 
