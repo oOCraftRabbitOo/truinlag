@@ -155,7 +155,10 @@ pub enum BroadcastAction {
         completer: Team,
         completed: Challenge,
     },
-    Started,
+    Started {
+        teams: Vec<Team>,
+        game: Game,
+    },
     Ended,
     Pinged(Option<String>),
     Location {
@@ -182,7 +185,7 @@ pub enum BroadcastAction {
 pub enum Error {
     NoSessionSupplied, // Session specific commands like catch or add_team need a session
     SessionSupplied,   // Global commands like AddPlayer cannot be run with a session supplied
-    NotFound,          // Element you were looking for wasn't found
+    NotFound(String),  // Element you were looking for wasn't found
     TeamExists(String), // You cannot create a team if one with a similar name already exists
     AlreadyExists,     // Things that already exist cannot be created
     GameInProgress,    // Commands like AddTeam cannot be run if a game is in progress
@@ -190,6 +193,9 @@ pub enum Error {
     AmbiguousData,     // If multiple matching objects exist, e.g. players with passphrase lol
     InternalError,     // Some sort of internal database error
     NotImplemented,    // Feature is not yet implemented
+    TeamIsRunner(usize), // A relevant team is runner, but has to be catcher
+    TeamIsCatcher(usize), // A relevant team is catcher, but has to be runner
+    TeamsTooFar,       // Two relevant teams are too far away from each other
     BadData(String),
     TextError(String), // Some other kind of error with a custom text
 }
@@ -199,7 +205,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::NoSessionSupplied => write!(f, "A sesssion specific command (like 'addTeam') was called without a session being supplied."),
             Self::SessionSupplied => write!(f, "A session unspecific command (like 'addPlayer') was called with a session."),
-            Self::NotFound => write!(f, "Not Found"),
+            Self::NotFound(ctx) => write!(f, "{} was not found", ctx),
             Self::TeamExists(team) => write!(f, "Team {} already exists", team),
             Self::AlreadyExists => write!(f, "Already exists"),
             Self::GameInProgress => write!(f, "There is already a game in progress"),
@@ -207,8 +213,13 @@ impl std::fmt::Display for Error {
             Self::AmbiguousData => write!(f, "Ambiguous data"),
             Self::InternalError => write!(f, "There was a truinlag-internal error"),
             Self::NotImplemented => write!(f, "Not yet implemented"),
+            Self::TeamIsRunner(team) => write!(f, "team {} is runner", team),
+            Self::TeamIsCatcher(team) => write!(f, "team {} is catcher", team),
+            Self::TeamsTooFar => write!(f, "the teams are too far away from each other"),
             Self::BadData(text) => write!(f, "bad data: {}", text),
             Self::TextError(text) => write!(f, "{}", text),
         }
     }
 }
+
+impl std::error::Error for Error {}

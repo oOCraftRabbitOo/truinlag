@@ -1,8 +1,6 @@
 use crate::{
-    challenge::ChallengeEntry,
     engine,
     error::{self, Result},
-    DBEntry,
 };
 use async_broadcast as broadcast;
 use std::{future::Future, marker::Unpin, path::Path};
@@ -60,9 +58,6 @@ pub enum InternEngineResponse {
 pub enum InternEngineCommand {
     Command(EngineCommand),
     AutoSave,
-    ChallengesCleared {
-        leftovers: Vec<DBEntry<ChallengeEntry>>,
-    },
 }
 
 #[derive(Clone, Debug)]

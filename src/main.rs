@@ -5,7 +5,10 @@ pub(crate) mod runtime;
 pub(crate) mod session;
 pub(crate) mod team;
 
-use bonsaidb::core::schema::{Collection, Schema, SerializedCollection};
+use bonsaidb::{
+    core::schema::{Collection, Schema, SerializedCollection},
+    local::Database,
+};
 use challenge::{ChallengeEntry, ChallengeSetEntry};
 use error::Result;
 use image::imageops::FilterType;
@@ -24,12 +27,250 @@ async fn main() -> Result<()> {
 }
 
 #[derive(Clone, Debug)]
-pub struct DBEntry<T>
+pub struct ClonedDBEntry<T>
 where
     T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+    T: Clone,
 {
-    id: u64,
-    contents: T,
+    pub id: u64,
+    pub contents: T,
+}
+
+#[derive(Debug)]
+pub struct DBEntry<'a, T>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+    T: Clone,
+{
+    pub id: u64,
+    pub contents: &'a T,
+}
+
+impl<T> DBEntry<'_, T>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+    T: Clone,
+{
+    pub fn clone_contents(&self) -> ClonedDBEntry<T> {
+        ClonedDBEntry {
+            id: self.id,
+            contents: self.contents.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MutDBEntry<'a, T>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+    T: Clone,
+{
+    pub id: u64,
+    pub contents: &'a mut T,
+}
+
+impl<T> MutDBEntry<'_, T>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+    T: Clone,
+{
+    pub fn clone_contents(&self) -> ClonedDBEntry<T> {
+        ClonedDBEntry {
+            id: self.id,
+            contents: self.contents.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum DBStatus {
+    Unchanged,
+    Edited,
+    ToBeDeleted,
+    BeingDeleted,
+}
+
+#[derive(Clone, Debug)]
+pub struct DBMirror<T>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+    T: Clone,
+{
+    entries: Vec<Option<(T, DBStatus)>>,
+}
+
+impl<T> DBMirror<T>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+    T: Clone,
+{
+    fn from_db(db: &Database) -> Self {
+        let db_entries = T::all(db).query().unwrap();
+        let max_id = db_entries.iter().fold(
+            0,
+            |acc, e| if e.header.id > acc { e.header.id } else { acc },
+        ) as usize;
+        let mut entries = vec![None; max_id];
+        for entry in db_entries {
+            entries[entry.header.id as usize] = Some((entry.contents, DBStatus::Unchanged));
+        }
+
+        Self { entries }
+    }
+
+    fn get(&self, id: u64) -> Option<DBEntry<T>> {
+        match self.entries.get(id as usize) {
+            Some(Some((contents, status))) => match status {
+                DBStatus::Unchanged | DBStatus::Edited => Some(DBEntry { id, contents }),
+                DBStatus::ToBeDeleted | DBStatus::BeingDeleted => None,
+            },
+            Some(None) => None,
+            None => None,
+        }
+    }
+
+    fn get_mut(&mut self, id: u64) -> Option<MutDBEntry<T>> {
+        match self.entries.get_mut(id as usize) {
+            Some(Some((contents, status))) => match status {
+                DBStatus::Unchanged | DBStatus::Edited => {
+                    *status = DBStatus::Edited;
+                    Some(MutDBEntry { id, contents })
+                }
+                DBStatus::ToBeDeleted | DBStatus::BeingDeleted => None,
+            },
+            Some(None) => None,
+            None => None,
+        }
+    }
+
+    fn any(&self, mut predicate: impl FnMut(&T) -> bool) -> bool {
+        self.entries.iter().any(|entry| match entry {
+            None => false,
+            Some((item, _)) => predicate(item),
+        })
+    }
+
+    fn find(&self, mut predicate: impl FnMut(&T) -> bool) -> Option<DBEntry<T>> {
+        self.entries
+            .iter()
+            .enumerate()
+            .find(|(_, entry)| match entry {
+                None => false,
+                Some((item, _)) => predicate(item),
+            })
+            .map(|(index, entry)| DBEntry {
+                id: index as u64,
+                contents: match entry {
+                    None => panic!(),
+                    Some((item, _)) => item,
+                },
+            })
+    }
+
+    fn find_mut(&mut self, mut predicate: impl FnMut(&T) -> bool) -> Option<MutDBEntry<T>> {
+        self.entries
+            .iter_mut()
+            .enumerate()
+            .find(|(_, entry)| match entry {
+                None => false,
+                Some((item, _)) => predicate(item),
+            })
+            .map(|(index, entry)| MutDBEntry {
+                id: index as u64,
+                contents: match entry {
+                    None => panic!(),
+                    Some((item, _)) => item,
+                },
+            })
+    }
+
+    fn get_all(&self) -> Vec<DBEntry<T>> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| match entry {
+                None => None,
+                Some((item, status)) => match status {
+                    DBStatus::ToBeDeleted | DBStatus::BeingDeleted => None,
+                    DBStatus::Unchanged | DBStatus::Edited => Some(DBEntry {
+                        id: index as u64,
+                        contents: item,
+                    }),
+                },
+            })
+            .collect()
+    }
+
+    fn add(&mut self, thing: T) {
+        let new_entry = Some((thing, DBStatus::Edited));
+        match self.entries.iter_mut().find(|e| e.is_none()) {
+            Some(entry) => *entry = new_entry,
+            None => self.entries.push(new_entry),
+        }
+    }
+
+    fn delete(&mut self, id: u64) -> Result<(), ()> {
+        match self.entries.get_mut(id as usize) {
+            None => Err(()),
+            Some(None) => Err(()),
+            Some(Some((_, status))) => match status {
+                DBStatus::ToBeDeleted | DBStatus::BeingDeleted => Err(()),
+                DBStatus::Edited | DBStatus::Unchanged => {
+                    *status = DBStatus::ToBeDeleted;
+                    Ok(())
+                }
+            },
+        }
+    }
+
+    fn delete_all(&mut self) {
+        for entry in self.entries.iter_mut().flatten() {
+            entry.1 = DBStatus::ToBeDeleted;
+        }
+    }
+
+    fn extract_changes(&mut self) -> Vec<ClonedDBEntry<T>> {
+        let mut changes = Vec::new();
+        for (index, entry) in &mut self.entries.iter_mut().enumerate() {
+            if let Some((item, status)) = entry {
+                if matches!(status, DBStatus::Edited) {
+                    changes.push(ClonedDBEntry {
+                        id: index as u64,
+                        contents: item.clone(),
+                    });
+                    *status = DBStatus::Unchanged;
+                }
+            }
+        }
+        changes
+    }
+
+    fn clear_pending_deletions(&mut self) {
+        for entry in &mut self.entries {
+            if let Some((_, status)) = entry {
+                if matches!(status, DBStatus::BeingDeleted) {
+                    *entry = None;
+                }
+            }
+        }
+    }
+
+    fn extract_deletions(&mut self) -> Vec<u64> {
+        let mut deletions = Vec::new();
+        for (index, entry) in &mut self.entries.iter_mut().enumerate() {
+            if let Some((_, status)) = entry {
+                if matches!(status, DBStatus::ToBeDeleted) {
+                    deletions.push(index as u64);
+                    *status = DBStatus::BeingDeleted;
+                }
+            }
+        }
+        deletions
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 #[derive(Partial, Debug, Clone, Serialize, Deserialize)]
@@ -322,17 +563,4 @@ struct PastGame {
     mode: Mode,
     challenge_entries: Vec<ChallengeEntry>,
     teams: Vec<TeamEntry>,
-}
-
-pub fn add_into<T>(collection: &mut Vec<DBEntry<T>>, item: T)
-where
-    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
-{
-    collection.push(DBEntry {
-        id: match collection.iter().max_by(|x, y| x.id.cmp(&y.id)) {
-            None => 1,
-            Some(max_item) => max_item.id + 1,
-        },
-        contents: item,
-    })
 }

@@ -1,11 +1,10 @@
-use super::{
-    add_into,
+use crate::{
     challenge::{ChallengeEntry, ChallengeSetEntry},
     runtime::{
         InternEngineCommand, InternEngineResponse, InternEngineResponsePackage, RuntimeRequest,
     },
     session::Session,
-    DBEntry, EngineSchema, PastGame, PictureEntry, PlayerEntry, ZoneEntry,
+    ClonedDBEntry, DBMirror, EngineSchema, PastGame, PictureEntry, PlayerEntry, ZoneEntry,
 };
 use bonsaidb::{
     core::{
@@ -14,7 +13,7 @@ use bonsaidb::{
     },
     local::{
         config::{self, Builder},
-        Database, Storage,
+        AsyncDatabase, Database, Storage,
     },
 };
 use std::{
@@ -41,11 +40,16 @@ pub struct Engine {
     db: Database,
     changes_since_save: bool,
 
-    sessions: Vec<DBEntry<Session>>,
-    challenges: Vec<DBEntry<ChallengeEntry>>,
-    challenge_sets: Vec<DBEntry<ChallengeSetEntry>>,
-    zones: Vec<DBEntry<ZoneEntry>>,
-    players: Vec<DBEntry<PlayerEntry>>,
+    // sessions: Vec<DBEntry<Session>>,
+    // challenges: Vec<DBEntry<ChallengeEntry>>,
+    // challenge_sets: Vec<DBEntry<ChallengeSetEntry>>,
+    // zones: Vec<DBEntry<ZoneEntry>>,
+    // players: Vec<DBEntry<PlayerEntry>>,
+    sessions: DBMirror<Session>,
+    challenges: DBMirror<ChallengeEntry>,
+    challenge_sets: DBMirror<ChallengeSetEntry>,
+    zones: DBMirror<ZoneEntry>,
+    players: DBMirror<PlayerEntry>,
 
     pictures: Vec<Header>,
     past_games: Vec<Header>,
@@ -65,26 +69,11 @@ impl Engine {
         .create_database::<EngineSchema>("engine", true)
         .unwrap();
 
-        fn make_entry_vector<T>(db: &Database) -> Vec<DBEntry<T>>
-        where
-            T: SerializedCollection<Contents = T, PrimaryKey = u64>,
-        {
-            T::all(db)
-                .query()
-                .unwrap()
-                .into_iter()
-                .map(|d| DBEntry {
-                    id: d.header.id,
-                    contents: d.contents,
-                })
-                .collect()
-        }
-
-        let challenges = make_entry_vector::<ChallengeEntry>(&db);
-        let challenge_sets = make_entry_vector::<ChallengeSetEntry>(&db);
-        let zones = make_entry_vector::<ZoneEntry>(&db);
-        let sessions = make_entry_vector::<Session>(&db);
-        let players = make_entry_vector::<PlayerEntry>(&db);
+        let challenges = DBMirror::from_db(&db);
+        let challenge_sets = DBMirror::from_db(&db);
+        let zones = DBMirror::from_db(&db);
+        let sessions = DBMirror::from_db(&db);
+        let players = DBMirror::from_db(&db);
 
         let past_games = PastGame::all(&db).headers().unwrap();
         let pictures = PictureEntry::all(&db).headers().unwrap();
@@ -119,7 +108,7 @@ impl Engine {
             InternEngineCommand::Command(command) => {
                 self.changes_since_save = true;
                 match command.session {
-                    Some(id) => match self.sessions.iter_mut().find(|s| s.id == id) {
+                    Some(id) => match self.sessions.get_mut(id) {
                         Some(session) => session.contents.vroom(
                             command.action,
                             id,
@@ -127,28 +116,20 @@ impl Engine {
                             &self.challenges,
                             &self.zones,
                         ),
-                        None => Error(NotFound).into(),
+                        None => Error(NotFound(format!("session with id {}", id))).into(),
                     },
                     None => self.handle_action(command.action),
                 }
             }
 
-            InternEngineCommand::ChallengesCleared { leftovers } => {
-                if leftovers.is_empty() {
-                    Success.into()
-                } else {
-                    self.challenges = leftovers;
-                    Error(InternalError).into()
-                }
-            }
-
             InternEngineCommand::AutoSave => {
                 fn vec_overwrite_in_transaction<T>(
-                    entries: Vec<DBEntry<T>>,
+                    entries: Vec<ClonedDBEntry<T>>,
                     transaction: &mut Transaction,
                 ) -> Result<(), bonsaidb::core::Error>
                 where
                     T: SerializedCollection<Contents = T, PrimaryKey = u64> + 'static,
+                    T: Clone,
                 {
                     let mut ret = Ok(());
                     for entry in entries {
@@ -168,14 +149,44 @@ impl Engine {
                     }
                     ret
                 }
+                async fn vec_delete_in_transaction<T>(
+                    entries: Vec<u64>,
+                    transaction: &mut Transaction,
+                    db: &AsyncDatabase,
+                ) -> Result<(), bonsaidb::core::Error>
+                where
+                    T: SerializedCollection<Contents = T, PrimaryKey = u64> + 'static,
+                    T: Clone,
+                {
+                    for entry in T::get_multiple_async(&entries, db).await? {
+                        entry.delete_in_transaction(transaction)?;
+                    }
+                    Ok(())
+                }
                 if self.changes_since_save {
                     self.autosave_in_progress.store(true, Ordering::Relaxed);
-                    let players = self.players.clone();
-                    let db = self.db.clone();
-                    let sessions = self.sessions.clone();
-                    let challenges = self.challenges.clone();
-                    let challenge_sets = self.challenge_sets.clone();
-                    let zones = self.zones.clone();
+                    let db = self.db.to_async();
+
+                    let player_changes = self.players.extract_changes();
+                    self.players.clear_pending_deletions();
+                    let _ = self.players.extract_deletions(); // We never delete players
+                                                              //
+                    let session_changes = self.sessions.extract_changes();
+                    self.sessions.clear_pending_deletions();
+                    let session_deletions = self.sessions.extract_deletions();
+
+                    let challenge_changes = self.challenges.extract_changes();
+                    self.challenges.clear_pending_deletions();
+                    let challenge_deletions = self.challenges.extract_deletions();
+
+                    let challenge_set_changes = self.challenge_sets.extract_changes();
+                    self.challenge_sets.clear_pending_deletions();
+                    let challenge_set_deletions = self.challenge_sets.extract_deletions();
+
+                    let zone_changes = self.zones.extract_changes();
+                    self.zones.clear_pending_deletions();
+                    let zone_deletions = self.zones.extract_deletions();
+
                     self.changes_since_save = false;
 
                     let autosave_in_progress = self.autosave_in_progress.clone();
@@ -188,20 +199,61 @@ impl Engine {
                                 println!("Engine Autosave: starting autosave");
                                 let now = tokio::time::Instant::now();
                                 let mut transaction = Transaction::new();
-                                vec_overwrite_in_transaction(players, &mut transaction).unwrap();
-                                vec_overwrite_in_transaction(sessions, &mut transaction).unwrap();
-                                vec_overwrite_in_transaction(challenges, &mut transaction).unwrap();
-                                vec_overwrite_in_transaction(challenge_sets, &mut transaction)
+                                vec_overwrite_in_transaction(player_changes, &mut transaction)
                                     .unwrap();
-                                vec_overwrite_in_transaction(zones, &mut transaction).unwrap();
+                                vec_overwrite_in_transaction(session_changes, &mut transaction)
+                                    .unwrap();
+                                vec_delete_in_transaction::<Session>(
+                                    session_deletions,
+                                    &mut transaction,
+                                    &db,
+                                )
+                                .await
+                                .unwrap();
+                                vec_overwrite_in_transaction(challenge_changes, &mut transaction)
+                                    .unwrap();
+                                vec_delete_in_transaction::<ChallengeEntry>(
+                                    challenge_deletions,
+                                    &mut transaction,
+                                    &db,
+                                )
+                                .await
+                                .unwrap();
+                                vec_overwrite_in_transaction(
+                                    challenge_set_changes,
+                                    &mut transaction,
+                                )
+                                .unwrap();
+                                vec_delete_in_transaction::<ChallengeSetEntry>(
+                                    challenge_set_deletions,
+                                    &mut transaction,
+                                    &db,
+                                )
+                                .await
+                                .unwrap();
+                                vec_overwrite_in_transaction(zone_changes, &mut transaction)
+                                    .unwrap();
+                                vec_delete_in_transaction::<ZoneEntry>(
+                                    zone_deletions,
+                                    &mut transaction,
+                                    &db,
+                                )
+                                .await
+                                .unwrap();
 
-                                match transaction.apply_async(&db.to_async()).await {
+                                match transaction.apply_async(&db).await {
                                     Ok(_) => println!(
                                         "Engine Autosave: autosave succeeded in {} ms",
                                         now.elapsed().as_millis(),
                                     ),
                                     Err(err) => {
-                                        eprintln!("Engine Autosave: AUTOSAVE FAILED HIGH ALERT YOU ARE ALL FUCKED NOW (in {} ms): {}", now.elapsed().as_millis(), err);
+                                        eprintln!(
+                                            "Engine Autosave: \
+                                            AUTOSAVE FAILED HIGH ALERT YOU ARE ALL FUCKED NOW \
+                                            (in {} ms): {}",
+                                            now.elapsed().as_millis(),
+                                            err
+                                        );
                                         panic!("autosave failed")
                                     }
                                 }
@@ -227,6 +279,7 @@ impl Engine {
     fn get_all_zones(&self) -> InternEngineResponsePackage {
         SendZones(
             self.zones
+                .get_all()
                 .iter()
                 .map(|z| z.contents.to_sendable(z.id))
                 .collect(),
@@ -243,18 +296,15 @@ impl Engine {
         mongus: bool,
         s_bahn_zone: bool,
     ) -> InternEngineResponsePackage {
-        add_into(
-            &mut self.zones,
-            ZoneEntry {
-                zone,
-                num_conn_zones,
-                num_connections,
-                train_through,
-                mongus,
-                s_bahn_zone,
-                minutes_to: HashMap::new(),
-            },
-        );
+        self.zones.add(ZoneEntry {
+            zone,
+            num_conn_zones,
+            num_connections,
+            train_through,
+            mongus,
+            s_bahn_zone,
+            minutes_to: HashMap::new(),
+        });
         Success.into()
     }
 
@@ -264,11 +314,11 @@ impl Engine {
         to_zone: u64,
         minutes: u64,
     ) -> InternEngineResponsePackage {
-        if !self.zones.iter().any(|z| z.id == to_zone) {
-            Error(NotFound).into()
+        if self.zones.get(to_zone).is_none() {
+            Error(NotFound(format!("to zone with id {}", to_zone))).into()
         } else {
-            match self.zones.iter_mut().find(|z| z.id == from_zone) {
-                None => Error(NotFound).into(),
+            match self.zones.get_mut(from_zone) {
+                None => Error(NotFound(format!("from zone with id {}", from_zone))).into(),
                 Some(entry) => {
                     entry.contents.minutes_to.insert(to_zone, minutes);
                     Success.into()
@@ -280,10 +330,11 @@ impl Engine {
     fn get_raw_challenges(&self) -> InternEngineResponsePackage {
         SendRawChallenges(
             self.challenges
+                .get_all()
                 .iter()
                 .filter_map(|c| {
                     c.contents
-                        .to_sendable(c.id, &self.challenge_sets, &self.zones)
+                        .to_sendable(c.id, &self.challenge_sets.get_all(), &self.zones.get_all())
                         .ok()
                 })
                 .collect(),
@@ -293,10 +344,10 @@ impl Engine {
 
     fn set_raw_challenge(&mut self, challenge: InputChallenge) -> InternEngineResponsePackage {
         match challenge.id {
-            Some(id) => match self.challenges.iter_mut().find(|c| c.id == id) {
-                None => Error(NotFound).into(),
+            Some(id) => match self.challenges.get_mut(id) {
+                None => Error(NotFound(format!("challenge with id {}", id))).into(),
                 Some(c) => {
-                    c.contents = challenge.clone().into();
+                    *c.contents = challenge.clone().into();
                     Success.into()
                 }
             },
@@ -311,78 +362,62 @@ impl Engine {
     }
 
     fn delete_all_challenges(&mut self) -> InternEngineResponsePackage {
-        let db = self.db.clone();
-        let challenges = std::mem::take(&mut self.challenges);
-        let autosave_in_progress = self.autosave_in_progress.clone();
-        let autosave_done = self.autosave_done.clone();
-        InternEngineResponse::DelayedLoopback(tokio::spawn(async move {
-            if autosave_in_progress.load(Ordering::Relaxed) {
-                autosave_done.notified().await;
-            }
-            let query = ChallengeEntry::all_async(&db.to_async()).await;
-            match query {
-                Ok(all) => {
-                    let mut transaction = Transaction::new();
-                    for entry in all {
-                        entry.delete_in_transaction(&mut transaction).unwrap();
-                    }
-                    match transaction.apply_async(&db.to_async()).await {
-                        Ok(_) => {
-                            InternEngineCommand::ChallengesCleared { leftovers: Vec::with_capacity(0) }
-                        }
-                        Err(err) => {
-                            eprintln!("Engine: coudln't clear challenges from db: {}", err);
-                            InternEngineCommand::ChallengesCleared { leftovers: challenges }
-                        }
-                    }
-                }
-                Err(err) => {
-                    eprintln!(
-                        "Engine: couldn't retrieve challenges from db while clearing challenges: {}",
-                        err
-                    );
-                    InternEngineCommand::ChallengesCleared { leftovers: challenges }
-                }
-            }
-        })).into()
+        self.challenges.delete_all();
+        Success.into()
+        //         let db = self.db.clone();
+        // let challenges = std::mem::take(&mut self.challenges);
+        // let autosave_in_progress = self.autosave_in_progress.clone();
+        // let autosave_done = self.autosave_done.clone();
+        // InternEngineResponse::DelayedLoopback(tokio::spawn(async move {
+        //     if autosave_in_progress.load(Ordering::Relaxed) {
+        //         autosave_done.notified().await;
+        //     }
+        //     let query = ChallengeEntry::all_async(&db.to_async()).await;
+        //     match query {
+        //         Ok(all) => {
+        //             let mut transaction = Transaction::new();
+        //             for entry in all {
+        //                 entry.delete_in_transaction(&mut transaction).unwrap();
+        //             }
+        //             match transaction.apply_async(&db.to_async()).await {
+        //                 Ok(_) => {
+        //                     InternEngineCommand::ChallengesCleared { leftovers: Vec::with_capacity(0) }
+        //                 }
+        //                 Err(err) => {
+        //                     eprintln!("Engine: coudln't clear challenges from db: {}", err);
+        //                     InternEngineCommand::ChallengesCleared { leftovers: challenges }
+        //                 }
+        //             }
+        //         }
+        //         Err(err) => {
+        //             eprintln!(
+        //                 "Engine: couldn't retrieve challenges from db while clearing challenges: {}",
+        //                 err
+        //             );
+        //             InternEngineCommand::ChallengesCleared { leftovers: challenges }
+        //         }
+        //     }
+        // })).into()
     }
 
     fn get_player_by_passphrase(&self, passphrase: String) -> InternEngineResponsePackage {
-        let doc = self
-            .players
-            .iter()
-            .filter(|p| p.contents.passphrase == passphrase);
-        match doc.count() {
-            0 => Error(NotFound).into(),
-            1 => {
-                let document = self
-                    .players
-                    .iter()
-                    .find(|p| p.contents.passphrase == passphrase)
-                    .expect("should always exist, I just checked for that");
-                Player(document.contents.to_sendable(document.id)).into()
-            }
-            _ => {
-                eprintln!(
-                    "Engine: Multiple players seem to have passphrase {}",
-                    passphrase
-                );
-                Error(AmbiguousData).into()
-            }
+        match self.players.find(|p| p.passphrase == passphrase) {
+            None => Error(NotFound(format!("player with passphrase {}", passphrase))).into(),
+            Some(player) => Player(player.contents.to_sendable(player.id)).into(),
         }
     }
 
     fn add_raw_challenge(&mut self, challenge: InputChallenge) -> InternEngineResponsePackage {
         let entry: ChallengeEntry = challenge.clone().into();
-        add_into(&mut self.challenges, entry);
+        self.challenges.add(entry);
         Success.into()
     }
 
     fn add_session(&mut self, name: String, mode: Mode) -> InternEngineResponsePackage {
-        if self.sessions.iter().any(|s| s.contents.name == name) {
+        if self.sessions.any(|s| s.name == name) {
             ResponseAction::Error(commands::Error::AlreadyExists).into()
         } else {
-            add_into(&mut self.sessions, Session::new(name, mode));
+            self.sessions.add(Session::new(name, mode));
             Success.into()
         }
     }
@@ -394,22 +429,15 @@ impl Engine {
         passphrase: String,
         session: Option<u64>,
     ) -> InternEngineResponsePackage {
-        if self
-            .players
-            .iter()
-            .any(|p| p.contents.passphrase == passphrase)
-        {
+        if self.players.any(|p| p.passphrase == passphrase) {
             Error(AlreadyExists).into()
         } else {
-            add_into(
-                &mut self.players,
-                PlayerEntry {
-                    name,
-                    discord_id,
-                    passphrase,
-                    session,
-                },
-            );
+            self.players.add(PlayerEntry {
+                name,
+                discord_id,
+                passphrase,
+                session,
+            });
             Success.into()
         }
     }
@@ -419,15 +447,15 @@ impl Engine {
         player: u64,
         session: Option<u64>,
     ) -> InternEngineResponsePackage {
-        match self.players.iter_mut().find(|p| p.id == player) {
-            None => Error(NotFound).into(),
+        match self.players.get_mut(player) {
+            None => Error(NotFound(format!("player with id {}", player))).into(),
             Some(i_player) => {
                 let old_session = i_player.contents.session;
                 if old_session == session {
                     Success.into()
                 } else {
                     if let Some(tbr_session) = old_session {
-                        match self.sessions.iter_mut().find(|s| s.id == tbr_session) {
+                        match self.sessions.get_mut(tbr_session) {
                             None => {
                                 println!(
                                     "Engine: couldn't find session with id {} of player {}",
@@ -455,7 +483,7 @@ impl Engine {
                             .into()
                         }
                         Some(session) => {
-                            if self.sessions.iter().any(|s| s.id == session) {
+                            if self.sessions.get(session).is_some() {
                                 i_player.contents.session = Some(session);
                                 EngineResponse {
                                     response_action: Success,
@@ -467,7 +495,7 @@ impl Engine {
                                 }
                                 .into()
                             } else {
-                                Error(NotFound).into()
+                                Error(NotFound(format!("session with id {}", session))).into()
                             }
                         }
                     }
@@ -477,8 +505,8 @@ impl Engine {
     }
 
     fn set_player_name(&mut self, player: u64, name: String) -> InternEngineResponsePackage {
-        match self.players.iter_mut().find(|p| p.id == player) {
-            None => Error(NotFound).into(),
+        match self.players.get_mut(player) {
+            None => Error(NotFound(format!("player with id {}", player))).into(),
             Some(player) => {
                 player.contents.name = name;
                 Success.into()
@@ -491,8 +519,8 @@ impl Engine {
         player: u64,
         passphrase: String,
     ) -> InternEngineResponsePackage {
-        match self.players.iter_mut().find(|p| p.id == player) {
-            None => Error(NotFound).into(),
+        match self.players.get_mut(player) {
+            None => Error(NotFound(format!("player with id {}", player))).into(),
             Some(player) => {
                 player.contents.passphrase = passphrase;
                 Success.into()
@@ -500,23 +528,12 @@ impl Engine {
         }
     }
 
-    fn remove_player(&mut self, player: u64) -> InternEngineResponsePackage {
+    fn remove_player(&mut self, _player: u64) -> InternEngineResponsePackage {
         // Note that this doesn't actually remove the player from the db, it just
         // removes all references to them from all sessions and removes their
         // passphrase.
-        match self.players.iter_mut().find(|p| p.id == player) {
-            None => Error(NotFound).into(),
-            Some(p) => {
-                p.contents.passphrase = "".into();
-                self.sessions.iter_mut().for_each(|s| {
-                    s.contents
-                        .teams
-                        .iter_mut()
-                        .for_each(|t| t.players.retain(|p| p != &player))
-                });
-                Success.into()
-            }
-        }
+        // NEVERMIND, this currently does nothing
+        Error(NotImplemented).into()
     }
 
     fn ping(&self, payload: Option<String>) -> InternEngineResponsePackage {
@@ -530,11 +547,13 @@ impl Engine {
     fn get_state(&self) -> InternEngineResponsePackage {
         let sessions = self
             .sessions
+            .get_all()
             .iter()
             .map(|s| s.contents.to_sendable(s.id))
             .collect();
         let players = self
             .players
+            .get_all()
             .iter()
             .map(|p| p.contents.to_sendable(p.id))
             .collect();
@@ -542,10 +561,10 @@ impl Engine {
     }
 
     fn add_challenge_set(&mut self, name: String) -> InternEngineResponsePackage {
-        if self.challenge_sets.iter().any(|s| s.contents.name == name) {
+        if self.challenge_sets.any(|s| s.name == name) {
             Error(AlreadyExists).into()
         } else {
-            add_into(&mut self.challenge_sets, ChallengeSetEntry { name });
+            self.challenge_sets.add(ChallengeSetEntry { name });
             Success.into()
         }
     }
@@ -553,6 +572,7 @@ impl Engine {
     fn get_challenge_sets(&self) -> InternEngineResponsePackage {
         SendChallengeSets(
             self.challenge_sets
+                .get_all()
                 .iter()
                 .map(|s| s.contents.to_sendable(s.id))
                 .collect(),

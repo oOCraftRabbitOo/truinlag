@@ -1,3 +1,5 @@
+use crate::DBMirror;
+
 use super::{
     challenge::{ChallengeEntry, InOpenChallenge},
     Config, DBEntry, PlayerEntry, ZoneEntry,
@@ -38,12 +40,12 @@ pub enum PeriodContext {
         points_spent: u64, // the amount of points spent on the trophies
     },
     Caught {
-        catcher_team: u64, // the id of the team that was the catcher
-        bounty: u64,       // the bounty handed over to said team
+        catcher_team: usize, // the id of the team that was the catcher
+        bounty: u64,         // the bounty handed over to said team
     },
     Catcher {
-        caught_team: u64, // the id of the team that was caught
-        bounty: u64,      // the bounty collected from said team
+        caught_team: usize, // the id of the team that was caught
+        bounty: u64,        // the bounty collected from said team
     },
     CompletedChallenge {
         title: String,       // the title of the completed challenge
@@ -79,7 +81,7 @@ impl TeamEntry {
     }
     pub fn to_sendable(
         &self,
-        player_entries: &[DBEntry<PlayerEntry>],
+        player_entries: &DBMirror<PlayerEntry>,
         index: usize,
     ) -> truinlag::Team {
         truinlag::Team {
@@ -94,8 +96,7 @@ impl TeamEntry {
                 .iter()
                 .map(|p| {
                     player_entries
-                        .iter()
-                        .find(|pp| &pp.id == p)
+                        .get(*p)
                         .expect("PlayerEntry not found in db while making team sendable")
                         .contents
                         .to_sendable(*p)
@@ -127,11 +128,42 @@ impl TeamEntry {
         }
     }
 
+    pub fn location(&self) -> Option<(f64, f64)> {
+        self.locations
+            .last()
+            .map(|location| (location.0, location.1))
+    }
+
+    pub fn start_runner(
+        &mut self,
+        config: &Config,
+        challenge_db: &[DBEntry<ChallengeEntry>],
+        zone_db: &DBMirror<ZoneEntry>,
+    ) {
+        self.reset(config.start_zone);
+        self.generate_challenges(config, challenge_db, zone_db);
+    }
+
+    pub fn start_catcher(&mut self, config: &Config) {
+        self.reset(config.start_zone);
+        self.role = TeamRole::Catcher;
+    }
+
+    fn reset(&mut self, start_zone_id: u64) {
+        self.challenges = Vec::new();
+        self.periods = Vec::new();
+        self.locations = Vec::new();
+        self.role = TeamRole::Runner;
+        self.zone_id = start_zone_id;
+        self.points = 0;
+        self.bounty = 0;
+    }
+
     pub fn generate_challenges(
         &mut self,
         config: &Config,
         raw_challenges: &[DBEntry<ChallengeEntry>],
-        zone_entries: &[DBEntry<ZoneEntry>],
+        zone_entries: &DBMirror<ZoneEntry>,
     ) {
         // Challenge selection is the perhaps most complicated part of the game, so I think it
         // warrants some good commenting. The process for challenge generation differs mainly based
@@ -166,11 +198,15 @@ impl TeamEntry {
             .collect();
         if filtered_raw_challenges.is_empty() {
             filtered_raw_challenges = raw_challenges.iter().collect();
-            eprintln!("Engine: there are no more challenges that can be generated for team {} with the currently selected challenge sets. using all challenges", self.name);
+            eprintln!(
+                "Engine: there are no more challenges that can be generated \
+                for team {} with the currently selected challenge sets. \
+                using all challenges",
+                self.name
+            );
         }
         let team_zone = zone_entries
-            .iter()
-            .find(|z| z.id == self.zone_id)
+            .get(self.zone_id)
             .expect("team is in a zone that is not in db");
         self.challenges = match get_period(config) {
             GenerationPeriod::Specific => {
@@ -181,7 +217,7 @@ impl TeamEntry {
                 &filtered_raw_challenges,
                 raw_challenges,
                 zone_entries,
-                team_zone,
+                &team_zone,
             ),
             GenerationPeriod::Perimeter(ratio) => self.generate_perimeter_challenges(
                 config,
@@ -212,7 +248,7 @@ impl TeamEntry {
         config: &Config,
         raw_challenges: &[&DBEntry<ChallengeEntry>],
         backup_challenges: &[DBEntry<ChallengeEntry>],
-        zone_entries: &[DBEntry<ZoneEntry>],
+        zone_entries: &DBMirror<ZoneEntry>,
     ) -> Vec<InOpenChallenge> {
         // End game challenge generation is relatively simple. 1 Challenge is ZKaff, the others are
         // unspecific. No further restrictions apply.
@@ -264,7 +300,7 @@ impl TeamEntry {
         config: &Config,
         raw_challenges: &[&DBEntry<ChallengeEntry>],
         backup_challenges: &[DBEntry<ChallengeEntry>],
-        zone_entries: &[DBEntry<ZoneEntry>],
+        zone_entries: &DBMirror<ZoneEntry>,
         ratio: f64,
     ) -> Vec<InOpenChallenge> {
         // ZKaff challenge generation works the same as perimeter generation, except that ratio of
@@ -343,7 +379,7 @@ impl TeamEntry {
         &self,
         config: &Config,
         raw_challenges: &[&DBEntry<ChallengeEntry>],
-        zone_entries: &[DBEntry<ZoneEntry>],
+        zone_entries: &DBMirror<ZoneEntry>,
     ) -> Vec<InOpenChallenge> {
         // The specific period challenge generation is used at the very start of the game
         // and it is the most simple. Three challenges are generated and they must all be
@@ -370,7 +406,7 @@ impl TeamEntry {
         config: &Config,
         raw_challenges: &[&DBEntry<ChallengeEntry>],
         backup_challenges: &[DBEntry<ChallengeEntry>],
-        zone_entries: &[DBEntry<ZoneEntry>],
+        zone_entries: &DBMirror<ZoneEntry>,
         ratio: f64,
     ) -> Vec<InOpenChallenge> {
         // Perimeter period challenge generation generates three different kinds of challenges
@@ -391,10 +427,7 @@ impl TeamEntry {
         // challenges are requested, all challenges will be generated the same way as
         // during the specific period save one which will be unspecific.
 
-        match zone_entries
-            .iter()
-            .find(|z| z.contents.zone == config.centre_zone)
-        {
+        match zone_entries.get(config.centre_zone) {
             Some(centre_zone) => {
                 if config.num_challenges == 3 {
                     let current_max_perim = lerp(
@@ -416,7 +449,7 @@ impl TeamEntry {
                                     c.contents.kaffskala,
                                     Some(x) if x as u64 <= config.perim_max_kaff))
                                 && (0..current_max_perim / 2)
-                                    .contains(&c.contents.distance(centre_zone))
+                                    .contains(&c.contents.distance(&centre_zone))
                         })
                         .collect();
 
@@ -434,7 +467,7 @@ impl TeamEntry {
                                     Some(x) if x as u64 <= config.perim_max_kaff
                                 ))
                                 && (current_max_perim / 2..current_max_perim)
-                                    .contains(&c.contents.distance(centre_zone))
+                                    .contains(&c.contents.distance(&centre_zone))
                         })
                         .collect();
 
@@ -487,7 +520,11 @@ impl TeamEntry {
                 }
             }
             None => {
-                eprintln!("Engine: VERY BAD ERROR: couldn't find zone 110 while generating perimeter challenge, generating fallback challenges instead");
+                eprintln!(
+                    "Engine: VERY BAD ERROR: \
+                    couldn't find zone 110 while generating perimeter challenge, \
+                    generating fallback challenges instead"
+                );
                 self.generate_fallback_challenges(
                     config,
                     raw_challenges,
@@ -503,7 +540,7 @@ impl TeamEntry {
         config: &Config,
         raw_challenges: &[&DBEntry<ChallengeEntry>],
         backup_challenges: &[DBEntry<ChallengeEntry>],
-        zone_entries: &[DBEntry<ZoneEntry>],
+        zone_entries: &DBMirror<ZoneEntry>,
         team_zone: &DBEntry<ZoneEntry>,
     ) -> Vec<InOpenChallenge> {
         // Normal period challenge generation generates three different kinds of
@@ -616,7 +653,7 @@ impl TeamEntry {
         config: &Config,
         raw_challenges: &[&DBEntry<ChallengeEntry>],
         backup_challenges: &[DBEntry<ChallengeEntry>],
-        zone_entries: &[DBEntry<ZoneEntry>],
+        zone_entries: &DBMirror<ZoneEntry>,
     ) -> Vec<InOpenChallenge> {
         // This function is called by other challenge generation functions if they for some reason
         // cannot generate their challenges as expected and, in particular, if there is an unexpected
@@ -672,7 +709,7 @@ impl TeamEntry {
         });
     }
 
-    pub fn be_caught(&mut self, catcher_id: u64) {
+    pub fn be_caught(&mut self, catcher_id: usize) {
         self.challenges.clear();
         self.role = TeamRole::Catcher;
         self.new_period(PeriodContext::Caught {
@@ -685,10 +722,10 @@ impl TeamEntry {
     pub fn have_caught(
         &mut self,
         bounty: u64,
-        caught_id: u64,
+        caught_id: usize,
         config: &Config,
         challenge_db: &[DBEntry<ChallengeEntry>],
-        zone_db: &[DBEntry<ZoneEntry>],
+        zone_db: &DBMirror<ZoneEntry>,
     ) {
         self.generate_challenges(config, challenge_db, zone_db);
         self.role = TeamRole::Runner;
@@ -705,10 +742,13 @@ impl TeamEntry {
         id: usize,
         config: &Config,
         challenge_db: &[DBEntry<ChallengeEntry>],
-        zone_db: &[DBEntry<ZoneEntry>],
-    ) -> Result<(), ()> {
+        zone_db: &DBMirror<ZoneEntry>,
+    ) -> Result<(), commands::Error> {
         match self.challenges.get(id).cloned() {
-            None => Err(()),
+            None => Err(commands::Error::NotFound(format!(
+                "challenge with id/index {}",
+                id
+            ))),
             Some(completed) => {
                 self.points += completed.points;
                 self.bounty += (completed.points as f64 * config.bounty_percentage) as u64;
@@ -737,15 +777,31 @@ fn smart_choose(
     context: &str,
     config: &Config,
     zone_zoneables: bool,
-    zone_db: &[DBEntry<ZoneEntry>],
+    zone_db: &DBMirror<ZoneEntry>,
 ) -> InOpenChallenge {
     match challenges.iter().enumerate().choose(&mut thread_rng()) {
         None => {
-            eprintln!("Engine: {} Not enough challenges, context: {}. generatig from all uncompleted challenges within the currents sets", chrono::Local::now(), context);
-            let selected = raw_challenges.choose(&mut thread_rng()).cloned().unwrap_or_else(|| {
-            eprintln!("Engine: {} Not enough challenges, context: {}. generating from all challenges", chrono::Local::now(), context);
-            backup_challenges.choose(&mut thread_rng()).expect("There were no raw challenges, that should never happen")
-        });
+            eprintln!(
+                "Engine: {} Not enough challenges, context: {}. \
+                generatig from all uncompleted challenges within the currents sets",
+                chrono::Local::now(),
+                context
+            );
+            let selected = raw_challenges
+                .choose(&mut thread_rng())
+                .cloned()
+                .unwrap_or_else(|| {
+                    eprintln!(
+                        "Engine: {} Not enough challenges, context: {}. \
+                        generating from all challenges",
+                        chrono::Local::now(),
+                        context
+                    );
+                    backup_challenges.choose(&mut thread_rng()).expect(
+                        "There were no raw challenges, \
+                            that should never happen",
+                    )
+                });
             selected
                 .contents
                 .challenge(config, zone_zoneables, zone_db, selected.id)

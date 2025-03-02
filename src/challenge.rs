@@ -1,4 +1,4 @@
-use super::{Config, DBEntry, ZoneEntry};
+use crate::{Config, DBEntry, DBMirror, ZoneEntry};
 use bonsaidb::core::{
     document::{CollectionDocument, Emit},
     schema::{
@@ -149,12 +149,15 @@ impl ChallengeEntry {
         &self,
         config: &Config,
         zone_zoneables: bool,
-        zone_db: &[DBEntry<ZoneEntry>],
+        zone_db: &DBMirror<ZoneEntry>,
         id: u64,
     ) -> InOpenChallenge {
         // TODO: if zoneable and zone specified do something to let me know kthxbye
         if zone_db.is_empty() {
-            eprintln!("Engine: there are no zones in the database, challenge generation will not work as expected");
+            eprintln!(
+                "Engine: there are no zones in the database, \
+                challenge generation will not work as expected"
+            );
         }
 
         let mut points = 0_i64;
@@ -173,34 +176,30 @@ impl ChallengeEntry {
             .choose(&mut thread_rng())
             .unwrap_or(0);
         points += reps as i64 * self.points_per_rep as i64;
-        let mut zone_entries = self
-            .zone
-            .iter()
-            .filter_map(|z| zone_db.iter().find(|e| &e.id == z).cloned())
-            .collect();
+        let mut zone_entries = self.zone.iter().filter_map(|z| zone_db.get(*z)).collect();
         if zone_zoneables && matches!(self.kind, ChallengeType::Zoneable) && !zone_db.is_empty() {
             zone_entries = vec![zone_db
-                .iter()
+                .get_all()
+                .into_iter()
                 .choose(&mut thread_rng())
-                .expect("There are probably no ZoneEntries in the database")
-                .clone()]
+                .expect("There are probably no ZoneEntries in the database")]
         }
         if let Some(place_type) = &self.random_place {
             match place_type {
                 RandomPlaceType::Zone => {
                     zone_entries = vec![zone_db
-                        .iter()
+                        .get_all()
+                        .into_iter()
                         .choose(&mut thread_rng())
-                        .expect("There are probably no ZoneEntries")
-                        .clone()];
+                        .expect("There are probably no ZoneEntries")];
                 }
                 RandomPlaceType::SBahnZone => {
                     zone_entries = vec![zone_db
-                        .iter()
+                        .get_all()
+                        .into_iter()
                         .filter(|z| z.contents.s_bahn_zone)
                         .choose(&mut thread_rng())
-                        .expect("no s-bahn zones found in database")
-                        .clone()];
+                        .expect("no s-bahn zones found in database")];
                 }
             }
         }
