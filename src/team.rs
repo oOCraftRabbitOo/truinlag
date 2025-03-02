@@ -743,7 +743,7 @@ impl TeamEntry {
         config: &Config,
         challenge_db: &[DBEntry<ChallengeEntry>],
         zone_db: &DBMirror<ZoneEntry>,
-    ) -> Result<(), commands::Error> {
+    ) -> Result<InOpenChallenge, commands::Error> {
         match self.challenges.get(id).cloned() {
             None => Err(commands::Error::NotFound(format!(
                 "challenge with id/index {}",
@@ -764,7 +764,7 @@ impl TeamEntry {
                     self.zone_id = zone;
                 }
                 self.generate_challenges(config, challenge_db, zone_db);
-                Ok(())
+                Ok(completed)
             }
         }
     }

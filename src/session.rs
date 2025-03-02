@@ -310,16 +310,24 @@ impl Session {
         completed: usize,
         challenge_entries: &[DBEntry<ChallengeEntry>],
         zone_entries: &DBMirror<ZoneEntry>,
+        player_entries: &DBMirror<PlayerEntry>,
     ) -> InternEngineResponsePackage {
         let config = self.config();
         match self.teams.get_mut(completer) {
-            Some(completer) => match completer.complete_challenge(
+            Some(completer_team) => match completer_team.complete_challenge(
                 completed,
                 &config,
                 challenge_entries,
                 zone_entries,
             ) {
-                Ok(()) => Success.into(),
+                Ok(completed) => EngineResponse {
+                    response_action: Success,
+                    broadcast_action: Some(BroadcastAction::Completed {
+                        completer: completer_team.to_sendable(player_entries, completer),
+                        completed: completed.to_sendable(),
+                    }),
+                }
+                .into(),
                 Err(err) => Error(err).into(),
             },
             None => Error(NotFound(format!("completer team with id {}", completer))).into(),
@@ -495,9 +503,13 @@ impl Session {
             AssignPlayerToTeam { player, team } => {
                 self.assign_player_to_team(player, team, session_id)
             }
-            Catch { catcher, caught } => {
-                self.catch(catcher, caught, &challenge_entries.get_all(), zone_entries)
-            }
+            Catch { catcher, caught } => self.catch(
+                catcher,
+                caught,
+                &challenge_entries.get_all(),
+                zone_entries,
+                player_entries,
+            ),
             Complete {
                 completer,
                 completed,
@@ -506,6 +518,7 @@ impl Session {
                 completed,
                 &challenge_entries.get_all(),
                 zone_entries,
+                player_entries,
             ),
             GetState => self.get_state(player_entries),
             AddTeam {
