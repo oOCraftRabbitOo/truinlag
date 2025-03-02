@@ -27,10 +27,10 @@ pub struct TeamEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Period {
-    context: PeriodContext,
-    position_start_index: u64,
-    position_end_index: u64,
-    end_time: chrono::NaiveTime,
+    pub context: PeriodContext,
+    pub position_start_index: u64,
+    pub position_end_index: u64,
+    pub end_time: chrono::NaiveTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +55,26 @@ pub enum PeriodContext {
         photo: u64,          // the id of the challenge photo
         id: u64,
     },
+}
+
+impl PartialEq for Period {
+    fn eq(&self, other: &Self) -> bool {
+        self.end_time.eq(&other.end_time)
+    }
+}
+
+impl Eq for Period {}
+
+impl PartialOrd for Period {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Period {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.end_time.cmp(&other.end_time)
+    }
 }
 
 impl TeamEntry {

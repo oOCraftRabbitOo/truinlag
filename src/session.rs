@@ -1,7 +1,7 @@
 use crate::{
     challenge::{ChallengeEntry, InOpenChallenge},
     runtime::{InternEngineCommand, InternEngineResponsePackage, RuntimeRequest},
-    team::TeamEntry,
+    team::{PeriodContext, TeamEntry},
     Config, DBEntry, DBMirror, InGame, PartialConfig, PlayerEntry, ZoneEntry,
 };
 use bonsaidb::core::schema::Collection;
@@ -483,6 +483,52 @@ impl Session {
         .into()
     }
 
+    fn get_events(&self) -> InternEngineResponsePackage {
+        let mut events = Vec::new();
+        for (team_id, team) in self.teams.iter().enumerate() {
+            events.extend(
+                team.periods
+                    .iter()
+                    .filter_map(|period| match &period.context {
+                        PeriodContext::CompletedChallenge {
+                            title,
+                            description,
+                            zone: _,
+                            points,
+                            photo: _,
+                            id: _,
+                        } => Some(Event::Complete {
+                            challenge: Challenge {
+                                title: title.clone(),
+                                description: description.clone(),
+                                points: *points,
+                            },
+                            completer_id: team_id,
+                            time: period.end_time,
+                        }),
+                        PeriodContext::Catcher {
+                            caught_team,
+                            bounty,
+                        } => Some(Event::Catch {
+                            catcher_id: team_id,
+                            caught_id: *caught_team,
+                            bounty: *bounty,
+                            time: period.end_time,
+                        }),
+                        PeriodContext::Trophy {
+                            trophies: _,
+                            points_spent: _,
+                        }
+                        | PeriodContext::Caught {
+                            catcher_team: _,
+                            bounty: _,
+                        } => None,
+                    }),
+            );
+        }
+        SendEvents(events).into()
+    }
+
     pub fn vroom(
         &mut self,
         command: EngineAction,
@@ -492,6 +538,7 @@ impl Session {
         zone_entries: &DBMirror<ZoneEntry>,
     ) -> InternEngineResponsePackage {
         match command {
+            GetEvents => self.get_events(),
             GenerateTeamChallenges(id) => {
                 self.generate_team_challenges(id, &challenge_entries.get_all(), zone_entries)
             }

@@ -124,6 +124,7 @@ pub enum EngineAction {
         to_zone: u64,
         minutes: u64,
     },
+    GetEvents,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -143,6 +144,7 @@ pub enum ResponseAction {
     Success,
     SendChallengeSets(Vec<ChallengeSet>),
     SendZones(Vec<Zone>),
+    SendEvents(Vec<Event>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

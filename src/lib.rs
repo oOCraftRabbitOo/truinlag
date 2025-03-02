@@ -377,3 +377,18 @@ pub struct Game {
     pub date: chrono::NaiveDate,
     pub mode: Mode,
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Event {
+    Catch {
+        catcher_id: usize,
+        caught_id: usize,
+        bounty: u64,
+        time: chrono::NaiveTime,
+    },
+    Complete {
+        challenge: Challenge,
+        completer_id: usize,
+        time: chrono::NaiveTime,
+    },
+}

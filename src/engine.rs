@@ -617,6 +617,7 @@ impl Engine {
                 team: _,
                 new_name: _,
             } => Error(NoSessionSupplied).into(),
+            GetEvents => Error(NoSessionSupplied).into(),
         }
     }
 }
