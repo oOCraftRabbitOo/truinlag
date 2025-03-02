@@ -427,7 +427,7 @@ impl TeamEntry {
         // challenges are requested, all challenges will be generated the same way as
         // during the specific period save one which will be unspecific.
 
-        match zone_entries.get(config.centre_zone) {
+        match zone_entries.find(|z| z.zone == config.centre_zone) {
             Some(centre_zone) => {
                 if config.num_challenges == 3 {
                     let current_max_perim = lerp(
