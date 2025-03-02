@@ -225,6 +225,7 @@ impl Session {
         caught: usize,
         challenge_entries: &[DBEntry<ChallengeEntry>],
         zone_entries: &DBMirror<ZoneEntry>,
+        player_entries: &DBMirror<PlayerEntry>,
     ) -> InternEngineResponsePackage {
         match self.game {
             Some(_) => {
@@ -233,6 +234,7 @@ impl Session {
                 }
                 let bounty;
                 let config = self.config();
+                let broadcast;
                 match self.teams.get(catcher) {
                     Some(catcher_team) => match catcher_team.role {
                         TeamRole::Catcher => match self.teams.get(caught) {
@@ -251,7 +253,11 @@ impl Session {
                                             return Error(TeamsTooFar).into();
                                         }
                                     }
-                                    bounty = caught_team.bounty
+                                    bounty = caught_team.bounty;
+                                    broadcast = Caught {
+                                        catcher: catcher_team.to_sendable(player_entries, catcher),
+                                        caught: caught_team.to_sendable(player_entries, caught),
+                                    };
                                 }
                                 TeamRole::Catcher => return Error(TeamIsCatcher(caught)).into(),
                             },
@@ -288,7 +294,11 @@ impl Session {
                         return Error(NotFound(format!("caught team with id {}", caught))).into()
                     }
                 }
-                Success.into()
+                EngineResponse {
+                    response_action: Success,
+                    broadcast_action: Some(broadcast),
+                }
+                .into()
             }
             None => Error(GameNotRunning).into(),
         }
