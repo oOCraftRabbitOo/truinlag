@@ -40,11 +40,6 @@ pub struct Engine {
     db: Database,
     changes_since_save: bool,
 
-    // sessions: Vec<DBEntry<Session>>,
-    // challenges: Vec<DBEntry<ChallengeEntry>>,
-    // challenge_sets: Vec<DBEntry<ChallengeSetEntry>>,
-    // zones: Vec<DBEntry<ZoneEntry>>,
-    // players: Vec<DBEntry<PlayerEntry>>,
     sessions: DBMirror<Session>,
     challenges: DBMirror<ChallengeEntry>,
     challenge_sets: DBMirror<ChallengeSetEntry>,
@@ -260,14 +255,14 @@ impl Engine {
 
                                 autosave_in_progress.store(false, Ordering::Relaxed);
                                 autosave_done.notify_waiters();
-                                sleep(Duration::from_secs(3)).await;
+                                sleep(Duration::from_secs(1)).await;
                                 InternEngineCommand::AutoSave
                             },
                         ))]),
                     }
                 } else {
                     RuntimeRequest::CreateTimer {
-                        duration: Duration::from_secs(3),
+                        duration: Duration::from_secs(1),
                         payload: InternEngineCommand::AutoSave,
                     }
                     .into()
@@ -364,40 +359,6 @@ impl Engine {
     fn delete_all_challenges(&mut self) -> InternEngineResponsePackage {
         self.challenges.delete_all();
         Success.into()
-        //         let db = self.db.clone();
-        // let challenges = std::mem::take(&mut self.challenges);
-        // let autosave_in_progress = self.autosave_in_progress.clone();
-        // let autosave_done = self.autosave_done.clone();
-        // InternEngineResponse::DelayedLoopback(tokio::spawn(async move {
-        //     if autosave_in_progress.load(Ordering::Relaxed) {
-        //         autosave_done.notified().await;
-        //     }
-        //     let query = ChallengeEntry::all_async(&db.to_async()).await;
-        //     match query {
-        //         Ok(all) => {
-        //             let mut transaction = Transaction::new();
-        //             for entry in all {
-        //                 entry.delete_in_transaction(&mut transaction).unwrap();
-        //             }
-        //             match transaction.apply_async(&db.to_async()).await {
-        //                 Ok(_) => {
-        //                     InternEngineCommand::ChallengesCleared { leftovers: Vec::with_capacity(0) }
-        //                 }
-        //                 Err(err) => {
-        //                     eprintln!("Engine: coudln't clear challenges from db: {}", err);
-        //                     InternEngineCommand::ChallengesCleared { leftovers: challenges }
-        //                 }
-        //             }
-        //         }
-        //         Err(err) => {
-        //             eprintln!(
-        //                 "Engine: couldn't retrieve challenges from db while clearing challenges: {}",
-        //                 err
-        //             );
-        //             InternEngineCommand::ChallengesCleared { leftovers: challenges }
-        //         }
-        //     }
-        // })).into()
     }
 
     fn get_player_by_passphrase(&self, passphrase: String) -> InternEngineResponsePackage {

@@ -110,7 +110,7 @@ where
             0,
             |acc, e| if e.header.id > acc { e.header.id } else { acc },
         ) as usize;
-        let mut entries = vec![None; max_id];
+        let mut entries = vec![None; max_id + 1];
         for entry in db_entries {
             entries[entry.header.id as usize] = Some((entry.contents, DBStatus::Unchanged));
         }
@@ -203,7 +203,9 @@ where
 
     fn add(&mut self, thing: T) {
         let new_entry = Some((thing, DBStatus::Edited));
-        match self.entries.iter_mut().find(|e| e.is_none()) {
+        let mut iter = self.entries.iter_mut();
+        //iter.next(); // May be necessary if BonsaiDB doesn't support zero-indexing
+        match iter.find(|e| e.is_none()) {
             Some(entry) => *entry = new_entry,
             None => self.entries.push(new_entry),
         }
