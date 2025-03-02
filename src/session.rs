@@ -342,6 +342,7 @@ impl Session {
                 .enumerate()
                 .map(|(i, t)| t.to_sendable(player_entries, i))
                 .collect(),
+            events: self.gather_events(),
             game: self.game.clone().map(|g| g.to_sendable()),
         }
         .into()
@@ -483,7 +484,7 @@ impl Session {
         .into()
     }
 
-    fn get_events(&self) -> InternEngineResponsePackage {
+    fn gather_events(&self) -> Vec<Event> {
         let mut events = Vec::new();
         for (team_id, team) in self.teams.iter().enumerate() {
             events.extend(
@@ -526,7 +527,11 @@ impl Session {
                     }),
             );
         }
-        SendEvents(events).into()
+        events
+    }
+
+    fn get_events(&self) -> InternEngineResponsePackage {
+        SendEvents(self.gather_events()).into()
     }
 
     pub fn vroom(

@@ -135,6 +135,7 @@ pub enum ResponseAction {
     SendRawChallenges(Vec<RawChallenge>),
     SendState {
         teams: Vec<Team>,
+        events: Vec<Event>,
         game: Option<Game>,
     },
     SendGlobalState {
