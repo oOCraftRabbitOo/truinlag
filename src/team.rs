@@ -439,35 +439,33 @@ impl TeamEntry {
                     let mut far_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
                         .iter()
                         .filter(|c| {
-                            matches!(
+                            (matches!(
                                 c.contents.kind,
-                                ChallengeType::Ortsspezifisch
-                                    | ChallengeType::Kaff
-                                    | ChallengeType::Regionsspezifisch
+                                ChallengeType::Ortsspezifisch | ChallengeType::Kaff
                             ) && (c.contents.kaffskala.is_none()
                                 || matches!(
                                     c.contents.kaffskala,
                                     Some(x) if x as u64 <= config.perim_max_kaff))
                                 && (0..current_max_perim / 2)
-                                    .contains(&c.contents.distance(&centre_zone))
+                                    .contains(&c.contents.distance(&centre_zone)))
+                                || matches!(c.contents.kind, ChallengeType::Regionsspezifisch)
                         })
                         .collect();
 
                     let mut near_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
                         .iter()
                         .filter(|c| {
-                            matches!(
+                            (matches!(
                                 c.contents.kind,
-                                ChallengeType::Ortsspezifisch
-                                    | ChallengeType::Kaff
-                                    | ChallengeType::Zoneable
+                                ChallengeType::Ortsspezifisch | ChallengeType::Kaff
                             ) && (c.contents.kaffskala.is_none()
                                 || matches!(
                                     c.contents.kaffskala,
                                     Some(x) if x as u64 <= config.perim_max_kaff
                                 ))
                                 && (current_max_perim / 2..current_max_perim)
-                                    .contains(&c.contents.distance(&centre_zone))
+                                    .contains(&c.contents.distance(&centre_zone)))
+                                || matches!(c.contents.kind, ChallengeType::Zoneable)
                         })
                         .collect();
 
@@ -558,28 +556,26 @@ impl TeamEntry {
             let mut far_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
                 .iter()
                 .filter(|c| {
-                    matches!(
+                    (matches!(
                         c.contents.kind,
-                        ChallengeType::Kaff
-                            | ChallengeType::Ortsspezifisch
-                            | ChallengeType::Zoneable
+                        ChallengeType::Kaff | ChallengeType::Ortsspezifisch
                     ) && config
                         .normal_period_far_distance_range
-                        .contains(&c.contents.distance(team_zone))
+                        .contains(&c.contents.distance(team_zone)))
+                        || (matches!(c.contents.kind, ChallengeType::Zoneable))
                 })
                 .collect();
 
             let mut near_challenges: Vec<&&DBEntry<ChallengeEntry>> = raw_challenges
                 .iter()
                 .filter(|c| {
-                    matches!(
+                    (matches!(
                         c.contents.kind,
-                        ChallengeType::Kaff
-                            | ChallengeType::Ortsspezifisch
-                            | ChallengeType::Zoneable
+                        ChallengeType::Kaff | ChallengeType::Ortsspezifisch
                     ) && config
                         .normal_period_near_distance_range
-                        .contains(&c.contents.distance(team_zone))
+                        .contains(&c.contents.distance(team_zone)))
+                        || (matches!(c.contents.kind, ChallengeType::Zoneable))
                 })
                 .collect();
 
