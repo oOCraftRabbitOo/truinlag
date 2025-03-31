@@ -153,7 +153,7 @@ pub async fn manager() -> Result<()> {
 
     println!("Manager: binding to socket {}", socket);
     let listener = net::UnixListener::bind(socket).expect(
-        "Manager: cannot bind to socket (maybe other session running, session improperly terminated, etc.)",
+        "Manager: cannot bind to socket (maybe other instance running, truinlag improperly terminated, etc.)",
     );
 
     let accept_connections = async move {
