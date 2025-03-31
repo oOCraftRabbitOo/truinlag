@@ -392,3 +392,75 @@ pub enum Event {
         time: chrono::NaiveTime,
     },
 }
+
+impl PartialEq for Event {
+    fn eq(&self, other: &Self) -> bool {
+        let my_time = match self {
+            Event::Catch {
+                catcher_id: _,
+                caught_id: _,
+                bounty: _,
+                time,
+            } => time,
+            Event::Complete {
+                challenge: _,
+                completer_id: _,
+                time,
+            } => time,
+        };
+        let other_time = match other {
+            Event::Catch {
+                catcher_id: _,
+                caught_id: _,
+                bounty: _,
+                time,
+            } => time,
+            Event::Complete {
+                challenge: _,
+                completer_id: _,
+                time,
+            } => time,
+        };
+        my_time.eq(other_time)
+    }
+}
+
+impl Eq for Event {}
+
+impl PartialOrd for Event {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Event {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let my_time = match self {
+            Event::Catch {
+                catcher_id: _,
+                caught_id: _,
+                bounty: _,
+                time,
+            } => time,
+            Event::Complete {
+                challenge: _,
+                completer_id: _,
+                time,
+            } => time,
+        };
+        let other_time = match other {
+            Event::Catch {
+                catcher_id: _,
+                caught_id: _,
+                bounty: _,
+                time,
+            } => time,
+            Event::Complete {
+                challenge: _,
+                completer_id: _,
+                time,
+            } => time,
+        };
+        my_time.cmp(other_time)
+    }
+}

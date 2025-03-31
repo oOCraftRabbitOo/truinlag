@@ -36,7 +36,7 @@ where
     pub contents: T,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DBEntry<'a, T>
 where
     T: SerializedCollection<Contents = T, PrimaryKey = u64>,

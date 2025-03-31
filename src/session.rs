@@ -527,6 +527,7 @@ impl Session {
                     }),
             );
         }
+        events.sort();
         events
     }
 

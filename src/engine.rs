@@ -35,10 +35,75 @@ use truinlag::{
     *,
 };
 
+/// A helper function for engine autosaves that provides a shorthand for overwriting multiple
+/// entries in a transaction.
+fn vec_overwrite_in_transaction<T>(
+    entries: Vec<ClonedDBEntry<T>>,
+    transaction: &mut Transaction,
+) -> Result<(), bonsaidb::core::Error>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64> + 'static,
+    T: Clone,
+{
+    let mut ret = Ok(());
+    for entry in entries {
+        match entry
+            .contents
+            .overwrite_in_transaction(&entry.id, transaction)
+        {
+            Ok(()) => (),
+            Err(err) => {
+                println!(
+                    "Engine: something went wrong during overwrite_in_transaction: {}",
+                    err
+                );
+                ret = Err(err);
+            }
+        }
+    }
+    ret
+}
+
+/// A helper function for engine autosaves that provides a shorthand for deleting multiple entries
+/// in a transaction.
+async fn vec_delete_in_transaction<T>(
+    entries: Vec<u64>,
+    transaction: &mut Transaction,
+    db: &AsyncDatabase,
+) -> Result<(), bonsaidb::core::Error>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64> + 'static,
+    T: Clone,
+{
+    for entry in T::get_multiple_async(&entries, db).await? {
+        entry.delete_in_transaction(transaction)?;
+    }
+    Ok(())
+}
+
+/// The engine is the core of truinlag that handles all requests and keeps tabs on the database.
+///
+/// # In the abstract
+///
+/// TrainLag is a game where, at the core, all commands have to be executed sequentially. For
+/// example, if one team catches another, it must be ensured that that operation is fully completed
+/// before anything else happens, like a different team trying to catch that same team. Otherwise,
+/// undefined behaviour may occur. At the same time, TrainLag is asynchronous, as many different
+/// clients are connected to truinlag at the same. The engine is meant to handle one request after
+/// another according to my specially cooked request-response-broadcast model, while the entirety
+/// of the runtime exists solely to accomodate the engine, such that the engine never has to wait.
+///
+/// # In preactice
+///
+/// The engine has to manage the database, which stores the current game state and player
+/// information and such, but accessing it is way too slow for practical use. Thus, the engine
+/// holds mirrors of frequently accessed database collections in memory and periodically autosaves
+/// them. Otherwise, it just holds the database connection and some control data, like
+/// `changes_since_save`.
 #[allow(dead_code)]
 pub struct Engine {
     db: Database,
-    changes_since_save: bool,
+    changes_since_save: bool, // technically redundant, I think
 
     sessions: DBMirror<Session>,
     challenges: DBMirror<ChallengeEntry>,
@@ -54,6 +119,22 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Initialises the engine and loads the database from `storage_path`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics on database errors, like when a corrupted database is found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut engine = engine::Engine::init(std::Path::new("truintabase"));
+    /// let engine_response = engine.vroom(
+    ///     InternEngineCommand::Command(
+    ///         truinlag::commands::EngineCommand::GetState
+    ///     )
+    /// );
+    /// ```
     pub fn init(storage_path: &Path) -> Self {
         let db = Storage::open(
             config::StorageConfiguration::new(storage_path)
@@ -88,6 +169,12 @@ impl Engine {
         }
     }
 
+    /// This is used to initialise the autosaves.
+    ///
+    /// The autosaves are handled in a way where the engine autosaves when it receives an autosave
+    /// signal. After completing the save, it sends itself another autosave signal on a timer. This
+    /// function provides an initial timer for an autosave signal and should therefore only be
+    /// called once.
     pub fn setup(&self) -> InternEngineResponsePackage {
         InternEngineResponsePackage {
             response: InternEngineResponse::DirectResponse(ResponseAction::Success.into()),
@@ -98,10 +185,20 @@ impl Engine {
         }
     }
 
+    /// This function fulfills engine requests and thereby modifies the game state and returns
+    /// responses and broadcasts.
     pub fn vroom(&mut self, command: InternEngineCommand) -> InternEngineResponsePackage {
+        // The engine can receive many kinds of commands, some from the runtime (and itself, with a
+        // delay for example) and some from actual clients. All cases are categorised within the
+        // `InternEngineCommand` enum.
         match command {
+            // These are cases from actual external clients. For readability, they are passed to
+            // helper functions.
             InternEngineCommand::Command(command) => {
                 self.changes_since_save = true;
+                // There are global and session-specific commands. If a command has a session, then
+                // the action is handled by the corresponding session (which is saved within the
+                // engine).
                 match command.session {
                     Some(id) => match self.sessions.get_mut(id) {
                         Some(session) => session.contents.vroom(
@@ -113,59 +210,21 @@ impl Engine {
                         ),
                         None => Error(NotFound(format!("session with id {}", id))).into(),
                     },
-                    None => self.handle_action(command.action),
+                    None => self.handle_action(command.action), // global action helper function
                 }
             }
 
             InternEngineCommand::AutoSave => {
-                fn vec_overwrite_in_transaction<T>(
-                    entries: Vec<ClonedDBEntry<T>>,
-                    transaction: &mut Transaction,
-                ) -> Result<(), bonsaidb::core::Error>
-                where
-                    T: SerializedCollection<Contents = T, PrimaryKey = u64> + 'static,
-                    T: Clone,
-                {
-                    let mut ret = Ok(());
-                    for entry in entries {
-                        match entry
-                            .contents
-                            .overwrite_in_transaction(&entry.id, transaction)
-                        {
-                            Ok(()) => (),
-                            Err(err) => {
-                                println!(
-                                    "Engine: something went wrong during overwrite_in_transaction: {}",
-                                    err
-                                );
-                                ret = Err(err);
-                            }
-                        }
-                    }
-                    ret
-                }
-                async fn vec_delete_in_transaction<T>(
-                    entries: Vec<u64>,
-                    transaction: &mut Transaction,
-                    db: &AsyncDatabase,
-                ) -> Result<(), bonsaidb::core::Error>
-                where
-                    T: SerializedCollection<Contents = T, PrimaryKey = u64> + 'static,
-                    T: Clone,
-                {
-                    for entry in T::get_multiple_async(&entries, db).await? {
-                        entry.delete_in_transaction(transaction)?;
-                    }
-                    Ok(())
-                }
                 if self.changes_since_save {
-                    self.autosave_in_progress.store(true, Ordering::Relaxed);
-                    let db = self.db.to_async();
+                    self.autosave_in_progress.store(true, Ordering::Relaxed); // might not be used
+                    let db = self.db.to_async(); // the db is stored as blocking bc idk
 
+                    // what follows here is some ugly code repetition, which i should probably get
+                    // rid of at some point...
                     let player_changes = self.players.extract_changes();
                     self.players.clear_pending_deletions();
                     let _ = self.players.extract_deletions(); // We never delete players
-                                                              //
+
                     let session_changes = self.sessions.extract_changes();
                     self.sessions.clear_pending_deletions();
                     let session_deletions = self.sessions.extract_deletions();
