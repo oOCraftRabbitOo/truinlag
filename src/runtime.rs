@@ -32,10 +32,12 @@ pub enum RuntimeRequest {
     CreateTimer {
         duration: Duration,
         payload: InternEngineCommand,
+        id: u64,
     },
     CreateAlarm {
         time: chrono::NaiveTime,
         payload: InternEngineCommand,
+        id: u64,
     },
     // Similar to DelayedLoopback but not associated with a client.
     RawLoopback(JoinHandle<InternEngineCommand>),
@@ -58,6 +60,8 @@ pub enum InternEngineResponse {
 pub enum InternEngineCommand {
     Command(EngineCommand),
     AutoSave,
+    UploadedImages(Vec<u64>),
+    TeamLeftGracePeriod { session_id: u64, team_id: usize },
 }
 
 #[derive(Clone, Debug)]
@@ -284,24 +288,29 @@ async fn engine(
     async fn handle_runtime_requests(
         requests: Option<Vec<RuntimeRequest>>,
         mpsc_sender: &mpsc::Sender<EngineSignal>,
-    ) -> Vec<JoinHandle<()>> {
+    ) -> Vec<(Option<u64>, JoinHandle<()>)> {
         let mut handles = Vec::new();
         if let Some(requests) = requests {
             for request in requests {
                 match request {
-                    RuntimeRequest::CreateTimer { duration, payload } => {
+                    RuntimeRequest::CreateTimer {
+                        duration,
+                        payload,
+                        id,
+                    } => {
                         let sender = mpsc_sender.clone();
-                        handles.push(tokio::spawn(async move {
+                        let timer_task = tokio::spawn(async move {
                             tokio::time::sleep(duration).await;
                             sender
                                 .send(EngineSignal::RawLoopbackCommand(payload))
                                 .await
                                 .unwrap()
-                        }));
+                        });
+                        handles.push((Some(id), timer_task));
                     }
-                    RuntimeRequest::CreateAlarm { time, payload } => {
+                    RuntimeRequest::CreateAlarm { time, payload, id } => {
                         let sender = mpsc_sender.clone();
-                        handles.push(tokio::spawn(async move {
+                        let alarm_task = tokio::spawn(async move {
                             tokio::time::sleep(
                                 (time - chrono::offset::Local::now().time())
                                     .abs()
@@ -313,11 +322,12 @@ async fn engine(
                                 .send(EngineSignal::RawLoopbackCommand(payload))
                                 .await
                                 .unwrap()
-                        }));
+                        });
+                        handles.push((Some(id), alarm_task));
                     }
                     RuntimeRequest::RawLoopback(handle) => {
                         let sender = mpsc_sender.clone();
-                        handles.push(tokio::spawn(async move {
+                        let task = tokio::spawn(async move {
                             match handle.await {
                                 Ok(command) => sender
                                     .send(EngineSignal::RawLoopbackCommand(command))
@@ -328,7 +338,8 @@ async fn engine(
                                     sender.send(EngineSignal::Shutdown).await.unwrap()
                                 }
                             }
-                        }));
+                        });
+                        handles.push((None, task));
                     }
                 }
             }
@@ -341,7 +352,7 @@ async fn engine(
         channel: oneshot::Sender<IOSignal>,
         mpsc_sender: mpsc::Sender<EngineSignal>,
         id: u64,
-    ) -> Vec<JoinHandle<()>> {
+    ) -> Vec<(Option<u64>, JoinHandle<()>)> {
         let mut handles = handle_runtime_requests(response.runtime_requests, &mpsc_sender).await;
         match response.response {
             InternEngineResponse::DirectResponse(response) => {
@@ -363,7 +374,7 @@ async fn engine(
                 }))).unwrap_or_else(|_err| println!("Engine: Couldn't send response to IO task, assuming client disconnect and continuing"));
             }
             InternEngineResponse::DelayedLoopback(handle) => {
-                handles.push(tokio::spawn(async move {
+                let task = tokio::spawn(async move {
                     match handle.await {
                         Ok(command) => {
                             mpsc_sender
@@ -380,7 +391,8 @@ async fn engine(
                             mpsc_sender.send(EngineSignal::Shutdown).await.unwrap();
                         }
                     }
-                }));
+                });
+                handles.push((None, task));
             }
         }
         handles
@@ -388,7 +400,7 @@ async fn engine(
     let mut engine = engine::Engine::init(Path::new("truintabase"));
     let mut handles = handle_runtime_requests(engine.setup().runtime_requests, &mpsc_sender).await;
     loop {
-        handles.retain(|h| !h.is_finished());
+        handles.retain(|(_, h)| !h.is_finished());
         match mpsc_handle
             .recv()
             .await
@@ -434,8 +446,13 @@ async fn engine(
             }
             EngineSignal::Shutdown => {
                 println!("Engine: shutdown signal received, awaiting tasks");
-                for handle in handles {
-                    let _ = handle.await;
+                for (id, handle) in handles {
+                    match id {
+                        None => {
+                            handle.await;
+                        }
+                        Some(_) => handle.abort(),
+                    }
                 }
                 println!("Engine: tasks awaited, breaking loop");
                 break;

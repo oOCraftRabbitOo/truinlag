@@ -307,11 +307,10 @@ pub struct Config {
     pub regio_ratio: f64,
     pub zkaff_ratio_range: std::ops::Range<f64>,
 
-    // Number of Catchers
+    // miscellaneous game options
     pub num_catchers: u64,
-
-    // starting zone id
     pub start_zone: u64,
+    pub grace_period_duration: chrono::TimeDelta,
 
     // Bounty system
     pub bounty_base_points: u64,
@@ -359,6 +358,7 @@ impl Default for Config {
             num_catchers: 3,
             num_challenges: 3,
             start_zone: 0,
+            grace_period_duration: chrono::TimeDelta::minutes(15),
             bounty_base_points: 100,
             bounty_start_points: 250,
             bounty_percentage: 0.25,
@@ -545,6 +545,7 @@ pub struct InGame {
     name: String,
     date: chrono::NaiveDate,
     mode: Mode,
+    alarm_id: u64,
 }
 
 impl InGame {

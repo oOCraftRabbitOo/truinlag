@@ -144,20 +144,104 @@ impl ChallengeEntry {
         })
     }
 
-    #[allow(dead_code)]
     pub fn challenge(
         &self,
         config: &Config,
         zone_zoneables: bool,
         zone_db: &DBMirror<ZoneEntry>,
+        centre_zone: DBEntry<ZoneEntry>,
+        current_zone: DBEntry<ZoneEntry>,
         id: u64,
     ) -> InOpenChallenge {
-        // TODO: if zoneable and zone specified do something to let me know kthxbye
+        use ChallengeType::*;
+
+        // calculate and select zone:
+        // the zone is specified in Kaff and Ortsspezifisch challenges, and in ZKaff the zone is
+        // always the centre (110). Zoneable challenges can be assigned a random zone and there are
+        // challenges with a random place, where a random zone is selected as well. A specialty of
+        // Ortsspezifisch challenges is that they can have multiple zones. The closest is selected.
         if zone_db.is_empty() {
             eprintln!(
                 "Engine: there are no zones in the database, \
-                challenge generation will not work as expected"
+                pointcalc will not work as expected"
             );
+        }
+        let needs_zone = self.random_place.is_some()
+            || matches!(self.kind, Ortsspezifisch | Kaff | ZKaff)
+            || (matches!(self.kind, Zoneable) && zone_zoneables);
+        let zone = match self.random_place {
+            Some(place_type) => match place_type {
+                RandomPlaceType::Zone => zone_db.get_all().choose(&mut thread_rng()).cloned(),
+                RandomPlaceType::SBahnZone => zone_db
+                    .get_all()
+                    .iter()
+                    .filter(|z| z.contents.s_bahn_zone)
+                    .choose(&mut thread_rng())
+                    .cloned(),
+            },
+            None => match self.kind {
+                Kaff => match self.zone.first() {
+                    Some(id) => zone_db.get(*id),
+                    None => {
+                        eprintln!("challenge with id {id} has invalid zone");
+                        None
+                    }
+                },
+                Ortsspezifisch => {
+                    match self.zone.iter().min_by(|zx, zy| {
+                        current_zone
+                            .contents
+                            .minutes_to
+                            .get(zx)
+                            .unwrap_or(&1000)
+                            .cmp(current_zone.contents.minutes_to.get(zy).unwrap_or(&1000))
+                    }) {
+                        None => {
+                            eprintln!("challenge with id {id} has invalid zones");
+                            None
+                        }
+                        Some(zid) => zone_db.get(*zid),
+                    }
+                }
+                ZKaff => Some(centre_zone.clone()),
+                Zoneable => {
+                    if zone_zoneables {
+                        zone_db.get_all().choose(&mut thread_rng()).cloned()
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+        };
+        if needs_zone && zone.is_none() {
+            eprintln!(
+                "something went wrong selecting zone for challenge with id {id}, \
+                omitting zone for pointcalc"
+            )
+        }
+
+        // generating title and description. These may be automatically generated based on the
+        // place name.
+        let mut title = config.default_challenge_title.clone();
+        let mut description = config.default_challenge_description.clone();
+        if let Some(place_name) = self.place.clone() {
+            match self.kind {
+                ZKaff => {
+                    title = format!("Züridrift nach {place_name}");
+                    description = format!("Gönd zu de Station {place_name} in Züri.");
+                }
+                _ => {
+                    title = format!("Usflug uf {place_name}");
+                    description = format!("Gönd nach {place_name}.");
+                }
+            }
+        }
+        if let Some(title_override) = self.title.clone() {
+            title = title_override;
+        }
+        if let Some(desc_override) = self.description.clone() {
+            description = desc_override;
         }
 
         let mut points = 0_i64;

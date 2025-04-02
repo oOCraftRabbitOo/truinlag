@@ -1,4 +1,7 @@
-use crate::DBMirror;
+use crate::{
+    runtime::{InternEngineCommand, RuntimeRequest},
+    DBMirror,
+};
 
 use super::{
     challenge::{ChallengeEntry, InOpenChallenge},
@@ -23,6 +26,7 @@ pub struct TeamEntry {
     pub locations: Vec<(f64, f64, NaiveTime)>,
     pub challenges: Vec<InOpenChallenge>,
     pub periods: Vec<Period>,
+    pub grace_period_end: Option<chrono::NaiveTime>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +101,7 @@ impl TeamEntry {
             locations: Vec::new(),
             periods: Vec::new(),
             zone_id: config.start_zone,
+            grace_period_end: None,
         }
     }
     pub fn to_sendable(
@@ -145,6 +150,10 @@ impl TeamEntry {
                 })
                 .collect(),
             location: self.locations.last().map(|loc| (loc.0, loc.1)),
+            in_grace_period: match self.grace_period_end {
+                None => false,
+                Some(time) => chrono::Local::now().time() <= time,
+            },
         }
     }
 
@@ -203,6 +212,12 @@ impl TeamEntry {
                 .iter()
                 .any(|s| c.contents.sets.contains(s))
         };
+        let approved_status_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
+            matches!(
+                c.contents.status,
+                ChallengeStatus::Approved | ChallengeStatus::Refactor
+            )
+        };
         let not_completed_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
             self.periods
                 .iter()
@@ -256,6 +271,7 @@ impl TeamEntry {
 
         let mut filtered_raw_challenges: Vec<DBEntry<ChallengeEntry>> = raw_challenges
             .iter()
+            .filter(approved_status_filter)
             .filter(challenge_set_filter)
             .filter(not_completed_filter)
             .cloned()
@@ -275,6 +291,8 @@ impl TeamEntry {
             &filtered_raw_challenges,
             raw_challenges,
             zone_entries,
+            team_zone.clone(),
+            team_zone.clone(),
         );
 
         let centre_zone = match zone_entries.find(|z| z.zone == config.centre_zone) {
@@ -282,7 +300,7 @@ impl TeamEntry {
             None => {
                 eprintln!(
                     "Engine: VERY BAD ERROR: \
-                    couldn't find zone 110 while generating perimeter challenge, \
+                    couldn't find centre zone during challenge selection, \
                     generating fallback challenges instead"
                 );
                 self.challenges = fallback_challenges;
@@ -308,9 +326,23 @@ impl TeamEntry {
                             // that shouldn't be zoned. It's okay since this closure only works
                             // with three challenges anyways.
                             if index == 2 {
-                                c.contents.challenge(config, false, zone_entries, c.id)
+                                c.contents.challenge(
+                                    config,
+                                    false,
+                                    zone_entries,
+                                    centre_zone.clone(),
+                                    team_zone.clone(),
+                                    c.id,
+                                )
                             } else {
-                                c.contents.challenge(config, true, zone_entries, c.id)
+                                c.contents.challenge(
+                                    config,
+                                    true,
+                                    zone_entries,
+                                    centre_zone.clone(),
+                                    team_zone.clone(),
+                                    c.id,
+                                )
                             }
                         })
                         .collect()
@@ -327,7 +359,16 @@ impl TeamEntry {
                     .filter(specific_filter)
                     .choose_multiple(&mut thread_rng(), config.num_challenges as usize)
                     .iter()
-                    .map(|c| c.contents.challenge(config, true, zone_entries, c.id))
+                    .map(|c| {
+                        c.contents.challenge(
+                            config,
+                            true,
+                            zone_entries,
+                            centre_zone.clone(),
+                            team_zone.clone(),
+                            c.id,
+                        )
+                    })
                     .collect()
             }
             GenerationPeriod::Normal => {
@@ -498,7 +539,16 @@ impl TeamEntry {
                     } else {
                         chosen_challenges
                             .iter()
-                            .map(|c| c.contents.challenge(config, false, zone_entries, c.id))
+                            .map(|c| {
+                                c.contents.challenge(
+                                    config,
+                                    false,
+                                    zone_entries,
+                                    centre_zone.clone(),
+                                    team_zone.clone(),
+                                    c.id,
+                                )
+                            })
                             .collect()
                     }
                 }
@@ -520,7 +570,16 @@ impl TeamEntry {
                 if chosen_challenges.len() == config.num_challenges as usize {
                     chosen_challenges
                         .iter()
-                        .map(|c| c.contents.challenge(config, false, zone_entries, c.id))
+                        .map(|c| {
+                            c.contents.challenge(
+                                config,
+                                false,
+                                zone_entries,
+                                centre_zone.clone(),
+                                team_zone.clone(),
+                                c.id,
+                            )
+                        })
                         .collect()
                 } else {
                     fallback_challenges
@@ -536,6 +595,8 @@ impl TeamEntry {
         raw_challenges: &[DBEntry<ChallengeEntry>],
         backup_challenges: &[DBEntry<ChallengeEntry>],
         zone_entries: &DBMirror<ZoneEntry>,
+        centre_zone: DBEntry<ZoneEntry>,
+        team_zone: DBEntry<ZoneEntry>,
     ) -> Vec<InOpenChallenge> {
         // this function is old, but it still generates the fallback challenges during challenge
         // selection. It is old and ugly, but it's not worth changing (yet), especially since the
@@ -552,7 +613,16 @@ impl TeamEntry {
             .choose_multiple(&mut thread_rng(), config.num_challenges as usize - 1);
         let mut challenges: Vec<InOpenChallenge> = challenges
             .iter()
-            .map(|c| c.contents.challenge(config, true, zone_entries, c.id))
+            .map(|c| {
+                c.contents.challenge(
+                    config,
+                    true,
+                    zone_entries,
+                    centre_zone.clone(),
+                    team_zone.clone(),
+                    c.id,
+                )
+            })
             .collect();
         let mut unspecific_challenges: Vec<&DBEntry<ChallengeEntry>> = raw_challenges
             .iter()
@@ -571,6 +641,8 @@ impl TeamEntry {
             config,
             false,
             zone_entries,
+            centre_zone,
+            team_zone,
         ));
         challenges
     }
@@ -591,6 +663,7 @@ impl TeamEntry {
     }
 
     pub fn be_caught(&mut self, catcher_id: usize) {
+        self.grace_period_end = None;
         self.challenges.clear();
         self.role = TeamRole::Catcher;
         self.new_period(PeriodContext::Caught {
@@ -607,15 +680,18 @@ impl TeamEntry {
         config: &Config,
         challenge_db: &[DBEntry<ChallengeEntry>],
         zone_db: &DBMirror<ZoneEntry>,
-    ) {
+    ) -> chrono::NaiveTime {
         self.generate_challenges(config, challenge_db, zone_db);
         self.role = TeamRole::Runner;
+        let end_time = chrono::Local::now().time() + config.grace_period_duration;
+        self.grace_period_end = Some(end_time);
         self.points += bounty;
         self.bounty = 0;
         self.new_period(PeriodContext::Catcher {
             caught_team: caught_id,
             bounty,
         });
+        end_time
     }
 
     pub fn complete_challenge(
@@ -631,6 +707,7 @@ impl TeamEntry {
                 id
             ))),
             Some(completed) => {
+                self.grace_period_end = None;
                 self.points += completed.points;
                 self.bounty += (completed.points as f64 * config.bounty_percentage) as u64;
                 self.new_period(PeriodContext::CompletedChallenge {
@@ -651,6 +728,7 @@ impl TeamEntry {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn smart_choose(
     challenges: &mut Vec<&DBEntry<ChallengeEntry>>,
     raw_challenges: &[DBEntry<ChallengeEntry>],
@@ -659,6 +737,8 @@ fn smart_choose(
     config: &Config,
     zone_zoneables: bool,
     zone_db: &DBMirror<ZoneEntry>,
+    centre_zone: DBEntry<ZoneEntry>,
+    team_zone: DBEntry<ZoneEntry>,
 ) -> InOpenChallenge {
     match challenges.iter().enumerate().choose(&mut thread_rng()) {
         None => {
@@ -686,14 +766,24 @@ fn smart_choose(
                         )
                         .clone()
                 });
-            selected
-                .contents
-                .challenge(config, zone_zoneables, zone_db, selected.id)
+            selected.contents.challenge(
+                config,
+                zone_zoneables,
+                zone_db,
+                centre_zone,
+                team_zone,
+                selected.id,
+            )
         }
         Some((i, selected)) => {
-            let ret = selected
-                .contents
-                .challenge(config, zone_zoneables, zone_db, selected.id);
+            let ret = selected.contents.challenge(
+                config,
+                zone_zoneables,
+                zone_db,
+                centre_zone,
+                team_zone,
+                selected.id,
+            );
             challenges.remove(i);
             ret
         }

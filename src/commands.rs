@@ -125,6 +125,7 @@ pub enum EngineAction {
         minutes: u64,
     },
     GetEvents,
+    UploadChallengePictures(Vec<Picture>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -146,6 +147,7 @@ pub enum ResponseAction {
     SendChallengeSets(Vec<ChallengeSet>),
     SendZones(Vec<Zone>),
     SendEvents(Vec<Event>),
+    UploadedPictures(Vec<u64>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -182,6 +184,7 @@ pub enum BroadcastAction {
     PlayerDeleted(Player),
     TeamMadeCatcher(Team),
     TeamMadeRunner(Team),
+    TeamLeftGracePeriod(Team),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

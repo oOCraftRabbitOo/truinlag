@@ -40,7 +40,7 @@ impl Picture {
         })
     }
     pub fn try_into_img(self) -> Result<DynamicImage, image::ImageError> {
-        image::load_from_memory_with_format(&self.data, ImageFormat::Avif)
+        image::load_from_memory_with_format(&self.data, ImageFormat::Jpeg)
     }
 }
 
@@ -337,6 +337,7 @@ pub struct Team {
     pub completed_challenges: Vec<CompletedChallenge>,
     // pub thumb_name: String,
     pub location: Option<(f64, f64)>,
+    pub in_grace_period: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

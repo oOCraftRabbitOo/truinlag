@@ -226,6 +226,8 @@ impl Session {
         challenge_entries: &[DBEntry<ChallengeEntry>],
         zone_entries: &DBMirror<ZoneEntry>,
         player_entries: &DBMirror<PlayerEntry>,
+        alarm_id: u64,
+        session_id: u64,
     ) -> InternEngineResponsePackage {
         match self.game {
             Some(_) => {
@@ -235,6 +237,7 @@ impl Session {
                 let bounty;
                 let config = self.config();
                 let broadcast;
+                let mut runtime_requests = Vec::new();
                 match self.teams.get(catcher) {
                     Some(catcher_team) => match catcher_team.role {
                         TeamRole::Catcher => match self.teams.get(caught) {
@@ -274,13 +277,21 @@ impl Session {
                 };
                 match self.teams.get_mut(catcher) {
                     Some(catcher_team) => {
-                        catcher_team.have_caught(
+                        let grace_period_end_time = catcher_team.have_caught(
                             bounty,
                             caught,
                             &config,
                             challenge_entries,
                             zone_entries,
                         );
+                        runtime_requests.push(RuntimeRequest::CreateAlarm {
+                            time: grace_period_end_time,
+                            payload: InternEngineCommand::TeamLeftGracePeriod {
+                                session_id,
+                                team_id: catcher,
+                            },
+                            id: alarm_id,
+                        });
                     }
                     None => {
                         return Error(NotFound(format!("catcher team with id {}", catcher))).into()
@@ -294,11 +305,14 @@ impl Session {
                         return Error(NotFound(format!("caught team with id {}", caught))).into()
                     }
                 }
-                EngineResponse {
-                    response_action: Success,
-                    broadcast_action: Some(broadcast),
+                InternEngineResponsePackage {
+                    response: EngineResponse {
+                        response_action: Success,
+                        broadcast_action: Some(broadcast),
+                    }
+                    .into(),
+                    runtime_requests: Some(runtime_requests),
                 }
-                .into()
             }
             None => Error(GameNotRunning).into(),
         }
@@ -393,6 +407,7 @@ impl Session {
         zone_entries: &DBMirror<ZoneEntry>,
         session_id: u64,
         player_entries: &DBMirror<PlayerEntry>,
+        timer_id: u64,
     ) -> InternEngineResponsePackage {
         match self.game {
             Some(_) => Error(GameInProgress).into(),
@@ -431,15 +446,6 @@ impl Session {
                     self.teams[id].start_runner(&config, challenge_entries, zone_entries);
                 }
 
-                // Setup game
-                let today = chrono::Local::now().date_naive();
-                let game = InGame {
-                    name: format!("{} am {}", self.name, today),
-                    date: today,
-                    mode: self.mode,
-                };
-                self.game = Some(game.clone());
-
                 // Setup alarm
                 let alarm = RuntimeRequest::CreateAlarm {
                     time: config.end_time,
@@ -447,7 +453,18 @@ impl Session {
                         session: Some(session_id),
                         action: Stop,
                     }),
+                    id: timer_id,
                 };
+
+                // Setup game
+                let today = chrono::Local::now().date_naive();
+                let game = InGame {
+                    name: format!("{} am {}", self.name, today),
+                    date: today,
+                    mode: self.mode,
+                    alarm_id: timer_id,
+                };
+                self.game = Some(game.clone());
 
                 InternEngineResponsePackage {
                     response: EngineResponse {
@@ -542,6 +559,7 @@ impl Session {
         player_entries: &DBMirror<PlayerEntry>,
         challenge_entries: &DBMirror<ChallengeEntry>,
         zone_entries: &DBMirror<ZoneEntry>,
+        timer_id: u64,
     ) -> InternEngineResponsePackage {
         match command {
             GetEvents => self.get_events(),
@@ -562,6 +580,8 @@ impl Session {
                 &challenge_entries.get_all(),
                 zone_entries,
                 player_entries,
+                timer_id,
+                session_id,
             ),
             Complete {
                 completer,
@@ -584,6 +604,7 @@ impl Session {
                 zone_entries,
                 session_id,
                 player_entries,
+                timer_id,
             ),
             Stop => self.stop(),
             AddSession { name: _, mode: _ } => Error(SessionSupplied).into(),
@@ -625,6 +646,7 @@ impl Session {
                 to_zone: _,
                 minutes: _,
             } => Error(SessionSupplied).into(),
+            UploadChallengePictures(_) => Error(SessionSupplied).into(),
         }
     }
 }

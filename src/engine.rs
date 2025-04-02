@@ -7,10 +7,7 @@ use crate::{
     ClonedDBEntry, DBMirror, EngineSchema, PastGame, PictureEntry, PlayerEntry, ZoneEntry,
 };
 use bonsaidb::{
-    core::{
-        connection::StorageConnection, document::Header, schema::SerializedCollection,
-        transaction::Transaction,
-    },
+    core::{connection::StorageConnection, schema::SerializedCollection, transaction::Transaction},
     local::{
         config::{self, Builder},
         AsyncDatabase, Database, Storage,
@@ -93,7 +90,7 @@ where
 /// another according to my specially cooked request-response-broadcast model, while the entirety
 /// of the runtime exists solely to accomodate the engine, such that the engine never has to wait.
 ///
-/// # In preactice
+/// # In practice
 ///
 /// The engine has to manage the database, which stores the current game state and player
 /// information and such, but accessing it is way too slow for practical use. Thus, the engine
@@ -111,11 +108,12 @@ pub struct Engine {
     zones: DBMirror<ZoneEntry>,
     players: DBMirror<PlayerEntry>,
 
-    pictures: Vec<Header>,
-    past_games: Vec<Header>,
+    pictures: Vec<u64>,
+    past_games: Vec<u64>,
 
     autosave_in_progress: Arc<AtomicBool>,
     autosave_done: Arc<Notify>,
+    latest_timer_id: u64,
 }
 
 impl Engine {
@@ -151,8 +149,18 @@ impl Engine {
         let sessions = DBMirror::from_db(&db);
         let players = DBMirror::from_db(&db);
 
-        let past_games = PastGame::all(&db).headers().unwrap();
-        let pictures = PictureEntry::all(&db).headers().unwrap();
+        let past_games = PastGame::all(&db)
+            .query()
+            .unwrap()
+            .iter()
+            .map(|doc| doc.header.id)
+            .collect();
+        let pictures = PictureEntry::all(&db)
+            .query() // this is dogshit but I don't know what else to do
+            .unwrap()
+            .iter()
+            .map(|doc| doc.header.id)
+            .collect();
 
         Engine {
             db,
@@ -166,6 +174,7 @@ impl Engine {
             pictures,
             autosave_in_progress: Arc::new(AtomicBool::new(false)),
             autosave_done: Arc::new(Notify::new()),
+            latest_timer_id: 0,
         }
     }
 
@@ -175,12 +184,14 @@ impl Engine {
     /// signal. After completing the save, it sends itself another autosave signal on a timer. This
     /// function provides an initial timer for an autosave signal and should therefore only be
     /// called once.
-    pub fn setup(&self) -> InternEngineResponsePackage {
+    pub fn setup(&mut self) -> InternEngineResponsePackage {
+        self.latest_timer_id += 1;
         InternEngineResponsePackage {
             response: InternEngineResponse::DirectResponse(ResponseAction::Success.into()),
             runtime_requests: Some(vec![RuntimeRequest::CreateTimer {
-                duration: tokio::time::Duration::from_secs(10),
+                duration: tokio::time::Duration::from_secs(2),
                 payload: InternEngineCommand::AutoSave,
+                id: self.latest_timer_id,
             }]),
         }
     }
@@ -201,17 +212,48 @@ impl Engine {
                 // engine).
                 match command.session {
                     Some(id) => match self.sessions.get_mut(id) {
-                        Some(session) => session.contents.vroom(
-                            command.action,
-                            id,
-                            &self.players,
-                            &self.challenges,
-                            &self.zones,
-                        ),
+                        Some(session) => {
+                            self.latest_timer_id += 1;
+                            let res = session.contents.vroom(
+                                command.action,
+                                id,
+                                &self.players,
+                                &self.challenges,
+                                &self.zones,
+                                self.latest_timer_id,
+                            );
+                            self.latest_timer_id += 1000; // why not
+                            res
+                        }
                         None => Error(NotFound(format!("session with id {}", id))).into(),
                     },
                     None => self.handle_action(command.action), // global action helper function
                 }
+            }
+
+            InternEngineCommand::TeamLeftGracePeriod {
+                session_id,
+                team_id,
+            } => {
+                match self.sessions.get(session_id) {
+                    None => Success.into(), // = do nothing
+                    Some(session) => {
+                        match session.contents.teams.get(team_id) {
+                            None => Success.into(), // = do nothing
+                            Some(team) => EngineResponse {
+                                response_action: Success,
+                                broadcast_action: Some(TeamLeftGracePeriod(
+                                    team.to_sendable(&self.players, team_id),
+                                )),
+                            }
+                            .into(),
+                        }
+                    }
+                }
+            }
+
+            InternEngineCommand::UploadedImages(pictures_added) => {
+                UploadedPictures(pictures_added).into()
             }
 
             InternEngineCommand::AutoSave => {
@@ -320,10 +362,12 @@ impl Engine {
                         ))]),
                     }
                 } else {
-                    RuntimeRequest::CreateTimer {
-                        duration: Duration::from_secs(1),
-                        payload: InternEngineCommand::AutoSave,
-                    }
+                    // manual timer creation, since automatically created timers get killed during
+                    // shutdown
+                    RuntimeRequest::RawLoopback(tokio::spawn(async {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        InternEngineCommand::AutoSave
+                    }))
                     .into()
                 }
             }
@@ -600,8 +644,29 @@ impl Engine {
         .into()
     }
 
+    fn upload_pictures(&mut self, pictures: Vec<Picture>) -> InternEngineResponsePackage {
+        let db = self.db.to_async();
+        let picture_task = tokio::spawn(async move {
+            let mut pictures_added = Vec::new();
+            for pic in pictures {
+                match PictureEntry::ChallengePicture(pic)
+                    .push_into_async(&db)
+                    .await
+                {
+                    Ok(doc) => pictures_added.push(doc.header.id),
+                    Err(err) => {
+                        eprintln!("Engine: error adding picture to db: {err}");
+                    }
+                }
+            }
+            InternEngineCommand::UploadedImages(pictures_added)
+        });
+        InternEngineResponse::DelayedLoopback(picture_task).into()
+    }
+
     fn handle_action(&mut self, action: EngineAction) -> InternEngineResponsePackage {
         match action {
+            UploadChallengePictures(pictures) => self.upload_pictures(pictures),
             GetAllZones => self.get_all_zones(),
             AddZone {
                 zone,
