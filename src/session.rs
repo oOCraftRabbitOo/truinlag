@@ -158,7 +158,7 @@ impl Session {
         match self
             .teams
             .iter()
-            .position(|t| t.players.iter().all(|&p| p == player))
+            .position(|t| t.players.iter().any(|&p| p == player))
         {
             None => Error(NotFound(format!("team with the player with id {}", player))).into(),
             Some(team) => {
