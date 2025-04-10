@@ -1,8 +1,8 @@
 use crate::{
-    challenge::{ChallengeEntry, InOpenChallenge},
-    runtime::{InternEngineCommand, InternEngineResponsePackage, RuntimeRequest},
+    challenge::InOpenChallenge,
+    runtime::{InternEngineCommand, InternEngineResponse, InternEngineResponsePackage},
     team::{PeriodContext, TeamEntry},
-    Config, DBEntry, DBMirror, InGame, PartialConfig, PlayerEntry, ZoneEntry,
+    Config, EngineContext, InGame, PartialConfig, PastGame, SessionContext,
 };
 use bonsaidb::core::schema::Collection;
 use geo::GeodesicDistance;
@@ -56,17 +56,43 @@ impl Session {
         }
     }
 
+    fn context<'a>(&self, context: EngineContext<'a>, session_id: u64) -> SessionContext<'a> {
+        SessionContext {
+            engine_context: context,
+            config: self.config(),
+            top_team_points: self.teams.iter().map(|t| t.points).max(),
+            session_id,
+        }
+    }
+
+    pub fn team_left_grace_period(
+        &mut self,
+        team_id: usize,
+        session_id: u64,
+        context: EngineContext,
+    ) -> InternEngineResponsePackage {
+        let context = self.context(context, session_id);
+        if let Some(team) = self.teams.get_mut(team_id) {
+            team.grace_period_end = None;
+            EngineResponse {
+                response_action: Success,
+                broadcast_action: Some(TeamLeftGracePeriod(team.to_sendable(team_id, &context))),
+            }
+            .into()
+        } else {
+            Success.into() // do nothing
+        }
+    }
+
     fn generate_team_challenges(
         &mut self,
         id: usize,
-        challenge_entries: &[DBEntry<ChallengeEntry>],
-        zone_entries: &DBMirror<ZoneEntry>,
+        context: &SessionContext,
     ) -> InternEngineResponsePackage {
-        let config = self.config();
         match self.teams.get_mut(id) {
             None => Error(NotFound(format!("team with id {}", id))).into(),
             Some(team) => {
-                team.generate_challenges(&config, challenge_entries, zone_entries);
+                team.generate_challenges(context);
                 Success.into()
             }
         }
@@ -111,7 +137,7 @@ impl Session {
     fn make_team_catcher(
         &mut self,
         id: usize,
-        player_entries: &DBMirror<PlayerEntry>,
+        context: &SessionContext,
     ) -> InternEngineResponsePackage {
         match self.teams.get_mut(id) {
             None => Error(NotFound(format!("team with id {}", id))).into(),
@@ -121,9 +147,7 @@ impl Session {
                     team.role = TeamRole::Catcher;
                     EngineResponse {
                         response_action: Success,
-                        broadcast_action: Some(TeamMadeCatcher(
-                            team.to_sendable(player_entries, id),
-                        )),
+                        broadcast_action: Some(TeamMadeCatcher(team.to_sendable(id, context))),
                     }
                     .into()
                 }
@@ -134,7 +158,7 @@ impl Session {
     fn make_team_runner(
         &mut self,
         id: usize,
-        player_entries: &DBMirror<PlayerEntry>,
+        context: &SessionContext,
     ) -> InternEngineResponsePackage {
         match self.teams.get_mut(id) {
             None => Error(NotFound(format!("team with id {}", id))).into(),
@@ -144,9 +168,7 @@ impl Session {
                     team.role = TeamRole::Runner;
                     EngineResponse {
                         response_action: Success,
-                        broadcast_action: Some(TeamMadeRunner(
-                            team.to_sendable(player_entries, id),
-                        )),
+                        broadcast_action: Some(TeamMadeRunner(team.to_sendable(id, context))),
                     }
                     .into()
                 }
@@ -180,7 +202,7 @@ impl Session {
         &mut self,
         player: u64,
         team: Option<usize>,
-        session_id: u64,
+        context: &SessionContext,
     ) -> InternEngineResponsePackage {
         let mut old_team = None;
         self.teams.iter_mut().enumerate().for_each(|(index, t)| {
@@ -196,7 +218,7 @@ impl Session {
                     EngineResponse {
                         response_action: Success,
                         broadcast_action: Some(PlayerChangedTeam {
-                            session: session_id,
+                            session: context.session_id,
                             player,
                             from_team: old_team,
                             to_team: team,
@@ -209,7 +231,7 @@ impl Session {
             None => EngineResponse {
                 response_action: Success,
                 broadcast_action: Some(PlayerChangedTeam {
-                    session: session_id,
+                    session: context.session_id,
                     player,
                     from_team: old_team,
                     to_team: team,
@@ -223,11 +245,7 @@ impl Session {
         &mut self,
         catcher: usize,
         caught: usize,
-        challenge_entries: &[DBEntry<ChallengeEntry>],
-        zone_entries: &DBMirror<ZoneEntry>,
-        player_entries: &DBMirror<PlayerEntry>,
-        alarm_id: u64,
-        session_id: u64,
+        context: &mut SessionContext,
     ) -> InternEngineResponsePackage {
         match self.game {
             Some(_) => {
@@ -235,7 +253,6 @@ impl Session {
                     return Error(BadData("a team cannot catch itself".into())).into();
                 }
                 let bounty;
-                let config = self.config();
                 let broadcast;
                 let mut runtime_requests = Vec::new();
                 match self.teams.get(catcher) {
@@ -258,8 +275,8 @@ impl Session {
                                     }
                                     bounty = caught_team.bounty;
                                     broadcast = Caught {
-                                        catcher: catcher_team.to_sendable(player_entries, catcher),
-                                        caught: caught_team.to_sendable(player_entries, caught),
+                                        catcher: catcher_team.to_sendable(catcher, context),
+                                        caught: caught_team.to_sendable(caught, context),
                                     };
                                 }
                                 TeamRole::Catcher => return Error(TeamIsCatcher(caught)).into(),
@@ -277,21 +294,8 @@ impl Session {
                 };
                 match self.teams.get_mut(catcher) {
                     Some(catcher_team) => {
-                        let grace_period_end_time = catcher_team.have_caught(
-                            bounty,
-                            caught,
-                            &config,
-                            challenge_entries,
-                            zone_entries,
-                        );
-                        runtime_requests.push(RuntimeRequest::CreateAlarm {
-                            time: grace_period_end_time,
-                            payload: InternEngineCommand::TeamLeftGracePeriod {
-                                session_id,
-                                team_id: catcher,
-                            },
-                            id: alarm_id,
-                        });
+                        runtime_requests
+                            .push(catcher_team.have_caught(bounty, caught, catcher, context));
                     }
                     None => {
                         return Error(NotFound(format!("catcher team with id {}", catcher))).into()
@@ -322,39 +326,35 @@ impl Session {
         &mut self,
         completer: usize,
         completed: usize,
-        challenge_entries: &[DBEntry<ChallengeEntry>],
-        zone_entries: &DBMirror<ZoneEntry>,
-        player_entries: &DBMirror<PlayerEntry>,
+        context: &SessionContext,
     ) -> InternEngineResponsePackage {
-        let config = self.config();
-        match self.teams.get_mut(completer) {
-            Some(completer_team) => match completer_team.complete_challenge(
-                completed,
-                &config,
-                challenge_entries,
-                zone_entries,
-            ) {
-                Ok(completed) => EngineResponse {
-                    response_action: Success,
-                    broadcast_action: Some(BroadcastAction::Completed {
-                        completer: completer_team.to_sendable(player_entries, completer),
-                        completed: completed.to_sendable(),
-                    }),
-                }
-                .into(),
-                Err(err) => Error(err).into(),
+        match self.game {
+            Some(_) => match self.teams.get_mut(completer) {
+                Some(completer_team) => match completer_team.complete_challenge(completed, context)
+                {
+                    Ok(completed) => EngineResponse {
+                        response_action: Success,
+                        broadcast_action: Some(BroadcastAction::Completed {
+                            completer: completer_team.to_sendable(completer, context),
+                            completed: completed.to_sendable(),
+                        }),
+                    }
+                    .into(),
+                    Err(err) => Error(err).into(),
+                },
+                None => Error(NotFound(format!("completer team with id {}", completer))).into(),
             },
-            None => Error(NotFound(format!("completer team with id {}", completer))).into(),
+            None => Error(GameNotRunning).into(),
         }
     }
 
-    fn get_state(&self, player_entries: &DBMirror<PlayerEntry>) -> InternEngineResponsePackage {
+    fn get_state(&self, context: &SessionContext) -> InternEngineResponsePackage {
         SendState {
             teams: self
                 .teams
                 .iter()
                 .enumerate()
-                .map(|(i, t)| t.to_sendable(player_entries, i))
+                .map(|(i, t)| t.to_sendable(i, context))
                 .collect(),
             events: self.gather_events(),
             game: self.game.clone().map(|g| g.to_sendable()),
@@ -401,14 +401,7 @@ impl Session {
         }
     }
 
-    fn start(
-        &mut self,
-        challenge_entries: &[DBEntry<ChallengeEntry>],
-        zone_entries: &DBMirror<ZoneEntry>,
-        session_id: u64,
-        player_entries: &DBMirror<PlayerEntry>,
-        timer_id: u64,
-    ) -> InternEngineResponsePackage {
+    fn start(&mut self, context: &mut SessionContext) -> InternEngineResponsePackage {
         match self.game {
             Some(_) => Error(GameInProgress).into(),
             None => {
@@ -423,14 +416,6 @@ impl Session {
                     )))
                     .into();
                 }
-                let start_zone = self.config().start_zone;
-                for team in &mut self.teams {
-                    team.role = TeamRole::Runner;
-                    team.bounty = 0;
-                    team.points = 0;
-                    team.periods = Vec::new();
-                    team.zone_id = start_zone;
-                }
                 let team_ids = 0..self.teams.len();
                 let catcher_ids = team_ids
                     .clone()
@@ -440,29 +425,33 @@ impl Session {
 
                 let config = self.config();
                 for id in catcher_ids {
-                    self.teams[id].start_catcher(&config);
+                    if let Err(err) = self.teams[id].start_catcher(context) {
+                        return Error(err).into();
+                    }
                 }
                 for id in runner_ids {
-                    self.teams[id].start_runner(&config, challenge_entries, zone_entries);
+                    if let Err(err) = self.teams[id].start_runner(context) {
+                        return Error(err).into();
+                    }
                 }
 
                 // Setup alarm
-                let alarm = RuntimeRequest::CreateAlarm {
-                    time: config.end_time,
-                    payload: InternEngineCommand::Command(EngineCommand {
-                        session: Some(session_id),
+                let (request, timer) = context.engine_context.timer_tracker.alarm(
+                    chrono::Local::now().with_time(config.end_time).unwrap(),
+                    InternEngineCommand::Command(EngineCommand {
+                        session: Some(context.session_id),
                         action: Stop,
                     }),
-                    id: timer_id,
-                };
+                );
 
                 // Setup game
-                let today = chrono::Local::now().date_naive();
+                let now = chrono::Local::now();
+                let today = now.date_naive();
                 let game = InGame {
                     name: format!("{} am {}", self.name, today),
-                    date: today,
+                    start_time: now,
                     mode: self.mode,
-                    alarm_id: timer_id,
+                    timer,
                 };
                 self.game = Some(game.clone());
 
@@ -474,31 +463,46 @@ impl Session {
                                 .teams
                                 .iter()
                                 .enumerate()
-                                .map(|(i, t)| t.to_sendable(player_entries, i))
+                                .map(|(i, t)| t.to_sendable(i, context))
                                 .collect(),
                             game: game.to_sendable(),
                         }),
                     }
                     .into(),
-                    runtime_requests: Some(vec![alarm]),
+                    runtime_requests: Some(vec![request]),
                 }
             }
         }
     }
 
-    fn stop(&mut self) -> InternEngineResponsePackage {
+    fn stop(&mut self, context: &mut SessionContext) -> InternEngineResponsePackage {
         if self.game.is_none() {
             return Error(GameNotRunning).into();
         }
-        // Error(NotImplemented).into() // TODO
-        // The following implementation is temporary and should be changed once the cached db is
-        // reworked with dedicated structs for minimal autosaves.
-        self.game = None;
-        EngineResponse {
-            response_action: Success,
-            broadcast_action: Some(Ended),
+
+        let mut requests = Vec::new();
+        if let Some(game) = &self.game {
+            requests.push(game.timer.cancel_request());
         }
-        .into()
+        let past_game = PastGame::new_now(self.game.take().unwrap(), self.teams.clone());
+        context.engine_context.past_game_db.add(past_game);
+
+        for team in &mut self.teams {
+            let _ = team.reset(context);
+            // we can ignore the potential error here, since the start zone is not relevant when
+            // stopping the game.
+            if let Some(timer) = &team.grace_period_end {
+                requests.push(timer.cancel_request());
+            }
+        }
+
+        InternEngineResponsePackage {
+            response: InternEngineResponse::DirectResponse(EngineResponse {
+                response_action: Success,
+                broadcast_action: Some(Ended),
+            }),
+            runtime_requests: Some(requests),
+        }
     }
 
     fn gather_events(&self) -> Vec<Event> {
@@ -556,57 +560,33 @@ impl Session {
         &mut self,
         command: EngineAction,
         session_id: u64,
-        player_entries: &DBMirror<PlayerEntry>,
-        challenge_entries: &DBMirror<ChallengeEntry>,
-        zone_entries: &DBMirror<ZoneEntry>,
-        timer_id: u64,
+        context: EngineContext,
     ) -> InternEngineResponsePackage {
+        let mut context = self.context(context, session_id);
         match command {
             GetEvents => self.get_events(),
-            GenerateTeamChallenges(id) => {
-                self.generate_team_challenges(id, &challenge_entries.get_all(), zone_entries)
-            }
+            GenerateTeamChallenges(id) => self.generate_team_challenges(id, &context),
             AddChallengeToTeam { team, challenge } => self.add_challenge_to_team(team, challenge),
             RenameTeam { team, new_name } => self.rename_team(team, new_name),
-            MakeTeamCatcher(id) => self.make_team_catcher(id, player_entries),
-            MakeTeamRunner(id) => self.make_team_runner(id, player_entries),
+            MakeTeamCatcher(id) => self.make_team_catcher(id, &context),
+            MakeTeamRunner(id) => self.make_team_runner(id, &context),
             SendLocation { player, location } => self.send_location(player, location),
             AssignPlayerToTeam { player, team } => {
-                self.assign_player_to_team(player, team, session_id)
+                self.assign_player_to_team(player, team, &context)
             }
-            Catch { catcher, caught } => self.catch(
-                catcher,
-                caught,
-                &challenge_entries.get_all(),
-                zone_entries,
-                player_entries,
-                timer_id,
-                session_id,
-            ),
+            Catch { catcher, caught } => self.catch(catcher, caught, &mut context),
             Complete {
                 completer,
                 completed,
-            } => self.complete(
-                completer,
-                completed,
-                &challenge_entries.get_all(),
-                zone_entries,
-                player_entries,
-            ),
-            GetState => self.get_state(player_entries),
+            } => self.complete(completer, completed, &context),
+            GetState => self.get_state(&context),
             AddTeam {
                 name,
                 discord_channel,
                 colour,
             } => self.add_team(name, discord_channel, colour),
-            Start => self.start(
-                &challenge_entries.get_all(),
-                zone_entries,
-                session_id,
-                player_entries,
-                timer_id,
-            ),
-            Stop => self.stop(),
+            Start => self.start(&mut context),
+            Stop => self.stop(&mut context),
             AddSession { name: _, mode: _ } => Error(SessionSupplied).into(),
             Ping(_) => Error(SessionSupplied).into(),
             GetPlayerByPassphrase(_) => Error(SessionSupplied).into(),

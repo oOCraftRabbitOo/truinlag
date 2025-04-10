@@ -3,6 +3,7 @@ use crate::{
     error::{self, Result},
 };
 use async_broadcast as broadcast;
+use serde::{Deserialize, Serialize};
 use std::{future::Future, marker::Unpin, path::Path};
 use tokio::{
     net, select,
@@ -35,12 +36,13 @@ pub enum RuntimeRequest {
         id: u64,
     },
     CreateAlarm {
-        time: chrono::NaiveTime,
+        time: chrono::DateTime<chrono::Local>,
         payload: InternEngineCommand,
         id: u64,
     },
     // Similar to DelayedLoopback but not associated with a client.
     RawLoopback(JoinHandle<InternEngineCommand>),
+    CancelTimer(u64),
 }
 
 pub struct InternEngineResponsePackage {
@@ -55,7 +57,7 @@ pub enum InternEngineResponse {
     DelayedLoopback(JoinHandle<InternEngineCommand>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 pub enum InternEngineCommand {
     Command(EngineCommand),
@@ -312,10 +314,9 @@ async fn engine(
                         let sender = mpsc_sender.clone();
                         let alarm_task = tokio::spawn(async move {
                             tokio::time::sleep(
-                                (time - chrono::offset::Local::now().time())
-                                    .abs()
+                                (time - chrono::offset::Local::now())
                                     .to_std()
-                                    .unwrap(),
+                                    .unwrap_or(Duration::ZERO),
                             )
                             .await;
                             sender
@@ -340,6 +341,12 @@ async fn engine(
                             }
                         });
                         handles.push((None, task));
+                    }
+                    RuntimeRequest::CancelTimer(id) => {
+                        handles.retain(|(i, _)| match i {
+                            None => true,
+                            Some(i) => i != &id,
+                        });
                     }
                 }
             }
@@ -449,7 +456,7 @@ async fn engine(
                 for (id, handle) in handles {
                     match id {
                         None => {
-                            handle.await;
+                            let _ = handle.await;
                         }
                         Some(_) => handle.abort(),
                     }

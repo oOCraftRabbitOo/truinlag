@@ -4,7 +4,8 @@ use crate::{
         InternEngineCommand, InternEngineResponse, InternEngineResponsePackage, RuntimeRequest,
     },
     session::Session,
-    ClonedDBEntry, DBMirror, EngineSchema, PastGame, PictureEntry, PlayerEntry, ZoneEntry,
+    ClonedDBEntry, DBMirror, EngineContext, EngineSchema, PastGame, PictureEntry, PlayerEntry,
+    TimerTracker, ZoneEntry,
 };
 use bonsaidb::{
     core::{connection::StorageConnection, schema::SerializedCollection, transaction::Transaction},
@@ -107,13 +108,13 @@ pub struct Engine {
     challenge_sets: DBMirror<ChallengeSetEntry>,
     zones: DBMirror<ZoneEntry>,
     players: DBMirror<PlayerEntry>,
+    past_games: DBMirror<PastGame>,
 
     pictures: Vec<u64>,
-    past_games: Vec<u64>,
 
     autosave_in_progress: Arc<AtomicBool>,
     autosave_done: Arc<Notify>,
-    latest_timer_id: u64,
+    timer_tracker: TimerTracker,
 }
 
 impl Engine {
@@ -143,24 +144,19 @@ impl Engine {
         .create_database::<EngineSchema>("engine", true)
         .unwrap();
 
-        let challenges = DBMirror::from_db(&db);
-        let challenge_sets = DBMirror::from_db(&db);
-        let zones = DBMirror::from_db(&db);
-        let sessions = DBMirror::from_db(&db);
-        let players = DBMirror::from_db(&db);
-
-        let past_games = PastGame::all(&db)
-            .query()
-            .unwrap()
-            .iter()
-            .map(|doc| doc.header.id)
-            .collect();
         let pictures = PictureEntry::all(&db)
             .query() // this is dogshit but I don't know what else to do
             .unwrap()
             .iter()
             .map(|doc| doc.header.id)
             .collect();
+
+        let challenges = DBMirror::from_db(&db);
+        let challenge_sets = DBMirror::from_db(&db);
+        let zones = DBMirror::from_db(&db);
+        let sessions = DBMirror::from_db(&db);
+        let players = DBMirror::from_db(&db);
+        let past_games = DBMirror::from_db(&db);
 
         Engine {
             db,
@@ -174,7 +170,7 @@ impl Engine {
             pictures,
             autosave_in_progress: Arc::new(AtomicBool::new(false)),
             autosave_done: Arc::new(Notify::new()),
-            latest_timer_id: 0,
+            timer_tracker: TimerTracker::new(),
         }
     }
 
@@ -185,13 +181,12 @@ impl Engine {
     /// function provides an initial timer for an autosave signal and should therefore only be
     /// called once.
     pub fn setup(&mut self) -> InternEngineResponsePackage {
-        self.latest_timer_id += 1;
         InternEngineResponsePackage {
             response: InternEngineResponse::DirectResponse(ResponseAction::Success.into()),
             runtime_requests: Some(vec![RuntimeRequest::CreateTimer {
                 duration: tokio::time::Duration::from_secs(2),
                 payload: InternEngineCommand::AutoSave,
-                id: self.latest_timer_id,
+                id: 0,
             }]),
         }
     }
@@ -213,17 +208,14 @@ impl Engine {
                 match command.session {
                     Some(id) => match self.sessions.get_mut(id) {
                         Some(session) => {
-                            self.latest_timer_id += 1;
-                            let res = session.contents.vroom(
-                                command.action,
-                                id,
-                                &self.players,
-                                &self.challenges,
-                                &self.zones,
-                                self.latest_timer_id,
-                            );
-                            self.latest_timer_id += 1000; // why not
-                            res
+                            let context = EngineContext {
+                                player_db: &self.players,
+                                challenge_db: &self.challenges,
+                                zone_db: &self.zones,
+                                past_game_db: &mut self.past_games,
+                                timer_tracker: &mut self.timer_tracker,
+                            };
+                            session.contents.vroom(command.action, id, context)
                         }
                         None => Error(NotFound(format!("session with id {}", id))).into(),
                     },
@@ -235,20 +227,18 @@ impl Engine {
                 session_id,
                 team_id,
             } => {
-                match self.sessions.get(session_id) {
+                let context = EngineContext {
+                    player_db: &self.players,
+                    challenge_db: &self.challenges,
+                    zone_db: &self.zones,
+                    past_game_db: &mut self.past_games,
+                    timer_tracker: &mut self.timer_tracker,
+                };
+                match self.sessions.get_mut(session_id) {
                     None => Success.into(), // = do nothing
-                    Some(session) => {
-                        match session.contents.teams.get(team_id) {
-                            None => Success.into(), // = do nothing
-                            Some(team) => EngineResponse {
-                                response_action: Success,
-                                broadcast_action: Some(TeamLeftGracePeriod(
-                                    team.to_sendable(&self.players, team_id),
-                                )),
-                            }
-                            .into(),
-                        }
-                    }
+                    Some(session) => session
+                        .contents
+                        .team_left_grace_period(team_id, session_id, context),
                 }
             }
 

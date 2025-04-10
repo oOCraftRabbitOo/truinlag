@@ -155,7 +155,7 @@ where
 pub async fn connect(address: Option<&str>) -> Result<(SendConnection, InactiveRecvConnection)> {
     let (socket_read, socket_write) = UnixStream::connect(address.unwrap_or("/tmp/truinsocket"))
         .await
-        .map_err(|err| Error::Connection(err))?
+        .map_err(Error::Connection)?
         .into_split();
     insert_connection(socket_read, socket_write).await
 }

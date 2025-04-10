@@ -1,4 +1,4 @@
-use crate::{Config, DBEntry, DBMirror, ZoneEntry};
+use crate::{DBEntry, SessionContext, ZoneEntry};
 use bonsaidb::core::{
     document::{CollectionDocument, Emit},
     schema::{
@@ -6,6 +6,7 @@ use bonsaidb::core::{
         ViewSchema,
     },
 };
+use chrono::Datelike;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
@@ -63,27 +64,36 @@ pub struct ChallengeEntry {
 
 impl ChallengeEntry {
     pub fn distance(&self, from: &DBEntry<ZoneEntry>) -> u64 {
-        *self.zone
+        match self.closest_zone(from) {
+            Some(zone) => *from.contents.minutes_to.get(&zone).unwrap_or(&0),
+            None => 0,
+        }
+    }
+
+    pub fn closest_zone(&self, from: &DBEntry<ZoneEntry>) -> Option<u64> {
+        self.zone
             .iter()
-            .filter_map(|z| from
-                .contents
-                .minutes_to
-                .get(z)
-                .or_else(|| {
+            .filter(|z| {
+                if from.contents.minutes_to.contains_key(z) {
+                    true
+                } else {
                     eprintln!(
-                        "Engine: error while calculating distance to zone: zone {} (id: {}) doesn't have a distance to the zone with id {}, ignoring zone",
-                        from.contents.zone,
-                        from.id,
-                        z
+                        "Engine: error while calculating distance to zone: \
+                        zone {} (id: {}) doesn't have a distance \
+                        to the zone with id {}, ignoring zone",
+                        from.contents.zone, from.id, z
                     );
-                    None
-                })
-            )
-        .min()
-        .unwrap_or_else(|| {
-            eprintln!("Engine: error while calculating distance to zone, has no zones or none with valid distances");
-            &0
-        })
+                    false
+                }
+            })
+            .min_by(|x, y| {
+                from.contents
+                    .minutes_to
+                    .get(x)
+                    .unwrap()
+                    .cmp(from.contents.minutes_to.get(y).unwrap())
+            })
+            .cloned()
     }
 
     pub fn to_sendable(
@@ -146,14 +156,16 @@ impl ChallengeEntry {
 
     pub fn challenge(
         &self,
-        config: &Config,
         zone_zoneables: bool,
-        zone_db: &DBMirror<ZoneEntry>,
         centre_zone: DBEntry<ZoneEntry>,
         current_zone: DBEntry<ZoneEntry>,
         id: u64,
+        points_to_top: Option<u64>,
+        context: &SessionContext,
     ) -> InOpenChallenge {
         use ChallengeType::*;
+        let zone_db = context.engine_context.zone_db;
+        let config = &context.config;
 
         // calculate and select zone:
         // the zone is specified in Kaff and Ortsspezifisch challenges, and in ZKaff the zone is
@@ -187,22 +199,13 @@ impl ChallengeEntry {
                         None
                     }
                 },
-                Ortsspezifisch => {
-                    match self.zone.iter().min_by(|zx, zy| {
-                        current_zone
-                            .contents
-                            .minutes_to
-                            .get(zx)
-                            .unwrap_or(&1000)
-                            .cmp(current_zone.contents.minutes_to.get(zy).unwrap_or(&1000))
-                    }) {
-                        None => {
-                            eprintln!("challenge with id {id} has invalid zones");
-                            None
-                        }
-                        Some(zid) => zone_db.get(*zid),
+                Ortsspezifisch => match self.closest_zone(&current_zone) {
+                    None => {
+                        eprintln!("challenge with id {id} has invalid zones");
+                        None
                     }
-                }
+                    Some(zid) => zone_db.get(zid),
+                },
                 ZKaff => Some(centre_zone.clone()),
                 Zoneable => {
                     if zone_zoneables {
@@ -219,6 +222,70 @@ impl ChallengeEntry {
                 "something went wrong selecting zone for challenge with id {id}, \
                 omitting zone for pointcalc"
             )
+        }
+
+        // point calculation
+        let mut points = 0_i64;
+        points += self.additional_points as i64;
+        if let Some(kaffskala) = self.kaffskala {
+            points += kaffskala as i64 * config.points_per_kaffness as i64;
+        }
+        if let Some(grade) = self.grade {
+            points += grade as i64 * config.points_per_grade as i64;
+        }
+        points += self.walking_time as i64 * config.points_per_walking_minute as i64;
+        points += self.stationary_time as i64 * config.points_per_stationary_minute as i64;
+        let reps = self
+            .repetitions
+            .clone()
+            .choose(&mut thread_rng())
+            .unwrap_or(0);
+        points += reps as i64 * self.points_per_rep as i64;
+        // zone points
+        if let Some(z) = &zone {
+            points += z.contents.zonic_kaffness(config) as i64;
+            points += (config.travel_minutes_multiplier
+                * (self.distance(&current_zone) as f32).powf(config.travel_minutes_exponent))
+                as i64;
+        }
+        match self.kind {
+            // zkaff points
+            ZKaff => {
+                if self.dead_end {
+                    points += config.zkaff_points_for_dead_end as i64;
+                }
+                points +=
+                    self.station_distance as i64 / config.zkaff_station_distance_divisor as i64;
+                points += self.time_to_hb as i64 * config.zkaff_points_per_minute_to_hb as i64;
+                points += ((config.zkaff_departures_base
+                    - (self.departures as f32).powf(config.zkaff_departures_exponent))
+                    * config.zkaff_departures_multiplier) as i64;
+            }
+            Zoneable => {
+                if zone_zoneables {
+                    points += config.points_for_zoneable as i64;
+                }
+            }
+            _ => (),
+        }
+        match chrono::Local::now().date_naive().weekday() {
+            chrono::Weekday::Sat => points = (points as f32 * self.bias_sat) as i64,
+            chrono::Weekday::Sun => points = (points as f32 * self.bias_sun) as i64,
+            _ => (),
+        }
+        if let Some(p) = points_to_top {
+            let p = p as i64 - config.underdog_starting_difference as i64;
+            if p.is_positive() {
+                points = (points as f32
+                    * (1.0 + (p as f32 * config.underdog_multiplyer_per_1000 * 0.001)))
+                    as i64;
+            }
+        }
+        if !self.fixed {
+            points += Normal::new(0_f64, points as f64 * config.relative_standard_deviation)
+                .expect("this cannot fail, since both μ and σ must have real values")
+                .sample(&mut thread_rng())
+                .round() as i64
         }
 
         // generating title and description. These may be automatically generated based on the
@@ -243,99 +310,25 @@ impl ChallengeEntry {
         if let Some(desc_override) = self.description.clone() {
             description = desc_override;
         }
-
-        let mut points = 0_i64;
-        points += self.additional_points as i64;
-        if let Some(kaffskala) = self.kaffskala {
-            points += kaffskala as i64 * config.points_per_kaffness as i64;
-        }
-        if let Some(grade) = self.grade {
-            points += grade as i64 * config.points_per_grade as i64;
-        }
-        points += self.walking_time as i64 * config.points_per_walking_minute as i64;
-        points += self.stationary_time as i64 * config.points_per_stationary_minute as i64;
-        let reps = self
-            .repetitions
-            .clone()
-            .choose(&mut thread_rng())
-            .unwrap_or(0);
-        points += reps as i64 * self.points_per_rep as i64;
-        let mut zone_entries = self.zone.iter().filter_map(|z| zone_db.get(*z)).collect();
-        if zone_zoneables && matches!(self.kind, ChallengeType::Zoneable) && !zone_db.is_empty() {
-            zone_entries = vec![zone_db
-                .get_all()
-                .into_iter()
-                .choose(&mut thread_rng())
-                .expect("There are probably no ZoneEntries in the database")]
-        }
-        if let Some(place_type) = &self.random_place {
-            match place_type {
-                RandomPlaceType::Zone => {
-                    zone_entries = vec![zone_db
-                        .get_all()
-                        .into_iter()
-                        .choose(&mut thread_rng())
-                        .expect("There are probably no ZoneEntries")];
-                }
-                RandomPlaceType::SBahnZone => {
-                    zone_entries = vec![zone_db
-                        .get_all()
-                        .into_iter()
-                        .filter(|z| z.contents.s_bahn_zone)
-                        .choose(&mut thread_rng())
-                        .expect("no s-bahn zones found in database")];
-                }
+        if let Some(z) = &zone {
+            if matches!(self.kind, Zoneable) && zone_zoneables {
+                description.push_str(
+                    format!(
+                        " ⚠️ Damit ihr Pünkt überchömed, mached das i de Zone {}.",
+                        z.contents.zone
+                    )
+                    .as_str(),
+                );
             }
+            title = title.replace("%z", format!("{}", z.contents.zone).as_str());
+            description = description.replace("%z", format!("{}", z.contents.zone).as_str());
+            title = title.replace("%s", format!("{}", z.contents.zone).as_str());
+            description = description.replace("%s", format!("{}", z.contents.zone).as_str());
         }
-        let (zone, z_points) = zone_entries.iter().fold((None, 0), |acc, z| {
-            if acc.1 == 0 || acc.1 > z.contents.zonic_kaffness(config) {
-                (Some(z), z.contents.zonic_kaffness(config))
-            } else {
-                acc
-            }
-        });
-        points += z_points as i64;
-        if !self.fixed {
-            points += Normal::new(0_f64, points as f64 * config.relative_standard_deviation)
-                .expect("This should't fail if the challenge points and the relative_standard_deviation have reasonable values")
-                .sample(&mut thread_rng())
-                .round() as i64
-        }
+        title = title.replace("%r", format!("{}", reps).as_str());
+        description = description.replace("%r", format!("{}", reps).as_str());
 
-        let mut title = None;
-        if let Some(kaff) = &self.place {
-            title = Some(format!("Usflug Uf {}", kaff))
-        }
-        if let Some(title_override) = &self.title {
-            title = Some(title_override.clone())
-        }
-        if self.random_place.is_some() {
-            if let Some(t) = &mut title {
-                *t = t.replace("%p", &zone.expect("This should never fail, because it should only run if there is exactly 1 zone_entry").contents.zone.to_string())
-            }
-        }
-        if let Some(t) = &mut title {
-            *t = t.replace("%r", &reps.to_string());
-        }
-
-        let mut description = None;
-        if let Some(kaff) = &self.place {
-            description = Some(format!("Gönd nach {}.", kaff))
-        }
-        if let Some(description_override) = &self.description {
-            description = Some(description_override.clone())
-        }
-        if self.random_place.is_some() {
-            if let Some(d) = &mut description {
-                *d = d.replace("%p", &zone.expect("This should never fail, because it should only run if there is exactly 1 zone_entry").contents.zone.to_string())
-            }
-        }
-        if let Some(d) = &mut description {
-            *d = d.replace("%r", &reps.to_string());
-        }
-
-        let zone = zone.map(|z| z.id);
-
+        // generating challenge action
         let mut action = None;
         if let Some(action_entry) = &self.action {
             action = Some(match action_entry {
@@ -357,11 +350,11 @@ impl ChallengeEntry {
         }
 
         InOpenChallenge {
-            title: title.unwrap_or(config.default_challenge_title.clone()),
-            description: description.unwrap_or(config.default_challenge_description.clone()),
+            title,
+            description,
             points: points as u64,
             action,
-            zone,
+            zone: zone.map(|z| z.id),
             id,
         }
     }

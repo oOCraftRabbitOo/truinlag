@@ -9,21 +9,115 @@ use bonsaidb::{
     core::schema::{Collection, Schema, SerializedCollection},
     local::Database,
 };
-use challenge::{ChallengeEntry, ChallengeSetEntry};
+use challenge::{ChallengeEntry, ChallengeSetEntry, InOpenChallenge};
 use error::Result;
 use image::imageops::FilterType;
 use partially::Partial;
-use runtime::manager;
+use runtime::{manager, InternEngineCommand, RuntimeRequest};
 use serde::{Deserialize, Serialize};
 use session::Session;
 use std::collections::HashMap;
-use team::TeamEntry;
-use truinlag::*;
+use team::{PeriodContext, TeamEntry};
+use truinlag::{
+    commands::{EngineAction, EngineCommand},
+    *,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     manager().await.unwrap();
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TimerHook {
+    payload: InternEngineCommand,
+    end_time: chrono::DateTime<chrono::Local>,
+    id: u64,
+}
+
+impl Default for TimerHook {
+    fn default() -> Self {
+        Self {
+            payload: InternEngineCommand::Command(EngineCommand {
+                action: EngineAction::Ping(None),
+                session: None,
+            }),
+            end_time: chrono::Local::now(),
+            id: u64::MAX,
+        }
+    }
+}
+
+impl TimerHook {
+    fn cancel_request(&self) -> RuntimeRequest {
+        RuntimeRequest::CancelTimer(self.id)
+    }
+
+    fn create_request(&self) -> RuntimeRequest {
+        RuntimeRequest::CreateAlarm {
+            time: self.end_time,
+            payload: self.payload.clone(),
+            id: self.id,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TimerTracker {
+    current_id: u64,
+}
+
+impl TimerTracker {
+    fn new() -> Self {
+        TimerTracker { current_id: 0 }
+    }
+
+    fn alarm(
+        &mut self,
+        time: chrono::DateTime<chrono::Local>,
+        payload: InternEngineCommand,
+    ) -> (RuntimeRequest, TimerHook) {
+        self.current_id = self.current_id.wrapping_add(1);
+        (
+            RuntimeRequest::CreateAlarm {
+                time,
+                payload: payload.clone(),
+                id: self.current_id,
+            },
+            TimerHook {
+                payload,
+                end_time: time,
+                id: self.current_id,
+            },
+        )
+    }
+
+    fn timer(
+        &mut self,
+        duration: chrono::TimeDelta,
+        payload: InternEngineCommand,
+    ) -> (RuntimeRequest, TimerHook) {
+        let time = chrono::Local::now() + duration;
+        self.alarm(time, payload)
+    }
+}
+
+#[derive(Debug)]
+pub struct EngineContext<'a> {
+    player_db: &'a DBMirror<PlayerEntry>,
+    challenge_db: &'a DBMirror<ChallengeEntry>,
+    zone_db: &'a DBMirror<ZoneEntry>,
+    past_game_db: &'a mut DBMirror<PastGame>,
+    timer_tracker: &'a mut TimerTracker,
+}
+
+#[derive(Debug)]
+pub struct SessionContext<'a> {
+    engine_context: EngineContext<'a>,
+    top_team_points: Option<u64>,
+    session_id: u64,
+    config: Config,
 }
 
 #[derive(Clone, Debug)]
@@ -36,7 +130,7 @@ where
     pub contents: T,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct DBEntry<'a, T>
 where
     T: SerializedCollection<Contents = T, PrimaryKey = u64>,
@@ -284,7 +378,25 @@ pub struct Config {
     pub points_per_grade: u64,
     pub points_per_walking_minute: u64,
     pub points_per_stationary_minute: u64,
-    pub points_per_travel_minute: u64,
+    // the points p for minutes travelled t are calculated based on the exponent e and the
+    // multiplier m using the formula $p = m * (t^e)$.
+    pub travel_minutes_exponent: f32,
+    pub travel_minutes_multiplier: f32,
+    pub points_for_zoneable: u64,
+    pub zkaff_points_for_dead_end: u64,
+    // points p for station distance s (in metres) are calculated based on the divisor d using the
+    // formula $p = \frac{s}{d}$.
+    pub zkaff_station_distance_divisor: u64,
+    pub zkaff_points_per_minute_to_hb: u64,
+    // points p for departures d (per hour) are calculated based on the exponent e, the base b and
+    // the multiplier m using the formula $p = m(b-d^e)$.
+    pub zkaff_departures_exponent: f32,
+    pub zkaff_departures_base: f32,
+    pub zkaff_departures_multiplier: f32,
+
+    // underdog system
+    pub underdog_starting_difference: u64,
+    pub underdog_multiplyer_per_1000: f32,
 
     // perimeter system
     pub perim_max_kaff: u64,
@@ -342,7 +454,17 @@ impl Default for Config {
             points_per_grade: 20,
             points_per_walking_minute: 10,
             points_per_stationary_minute: 10,
-            points_per_travel_minute: 12,
+            travel_minutes_exponent: 1.4,
+            travel_minutes_multiplier: 3.0,
+            points_for_zoneable: 100,
+            zkaff_points_for_dead_end: 50,
+            zkaff_station_distance_divisor: 20,
+            zkaff_points_per_minute_to_hb: 5,
+            zkaff_departures_exponent: 1.0 / 3.0,
+            zkaff_departures_multiplier: 32.0,
+            zkaff_departures_base: 7.0,
+            underdog_starting_difference: 1000,
+            underdog_multiplyer_per_1000: 0.25,
             perim_max_kaff: 4,
             perim_distance_range: 20..61,
             normal_period_near_distance_range: 0..26,
@@ -357,7 +479,7 @@ impl Default for Config {
             zkaff_ratio_range: 0.2..1.2,
             num_catchers: 3,
             num_challenges: 3,
-            start_zone: 0,
+            start_zone: 110,
             grace_period_duration: chrono::TimeDelta::minutes(15),
             bounty_base_points: 100,
             bounty_start_points: 250,
@@ -543,16 +665,17 @@ impl ZoneEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InGame {
     name: String,
-    date: chrono::NaiveDate,
+    start_time: chrono::DateTime<chrono::Local>,
     mode: Mode,
-    alarm_id: u64,
+    #[serde(default)]
+    timer: TimerHook,
 }
 
 impl InGame {
     pub fn to_sendable(&self) -> truinlag::Game {
         truinlag::Game {
             name: self.name.clone(),
-            date: self.date,
+            date: self.start_time.date_naive(),
             mode: self.mode,
         }
     }
@@ -562,8 +685,82 @@ impl InGame {
 #[collection(name = "past game")]
 struct PastGame {
     name: String,
-    date: chrono::NaiveDate,
+    start_time: chrono::DateTime<chrono::Local>,
+    end_time: chrono::DateTime<chrono::Local>,
     mode: Mode,
-    challenge_entries: Vec<ChallengeEntry>,
-    teams: Vec<TeamEntry>,
+    teams: Vec<PastTeam>,
+}
+
+impl PastGame {
+    fn new(game: InGame, teams: Vec<TeamEntry>, end_time: chrono::DateTime<chrono::Local>) -> Self {
+        Self {
+            name: game.name,
+            start_time: game.start_time,
+            end_time,
+            mode: game.mode,
+            teams: teams.iter().cloned().map(|t| t.into()).collect(),
+        }
+    }
+
+    fn new_now(game: InGame, teams: Vec<TeamEntry>) -> Self {
+        Self::new(game, teams, chrono::Local::now())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PastTeam {
+    name: String,
+    players: Vec<u64>,
+    discord_channel: Option<u64>,
+    end_role: TeamRole,
+    colour: Colour,
+    points: u64,
+    bounty: u64,
+    end_zone_id: u64,
+    start_location: Option<(f64, f64)>,
+    end_location: Option<(f64, f64)>,
+    end_challenges: Vec<InOpenChallenge>,
+    periods: Vec<PastPeriod>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PastPeriod {
+    pub context: PeriodContext,
+    pub end_time: chrono::DateTime<chrono::Local>,
+    pub end_location: (f64, f64),
+}
+
+impl From<TeamEntry> for PastTeam {
+    fn from(value: TeamEntry) -> Self {
+        let start_location = value.locations.first();
+        let start_location = start_location.map(|v| (v.0, v.1));
+        let end_location = value.locations.last();
+        let end_location = end_location.map(|v| (v.0, v.1));
+        Self {
+            name: value.name,
+            players: value.players,
+            discord_channel: value.discord_channel,
+            end_role: value.role,
+            colour: value.colour,
+            points: value.points,
+            bounty: value.bounty,
+            end_zone_id: value.zone_id,
+            start_location,
+            end_location,
+            end_challenges: value.challenges,
+            periods: value
+                .periods
+                .iter()
+                .map(|p| PastPeriod {
+                    context: p.context.clone(),
+                    end_time: chrono::Local::now().with_time(p.end_time).unwrap(),
+                    end_location: value
+                        .locations
+                        .get(p.position_end_index as usize)
+                        .map(|l| (l.0, l.1))
+                        .unwrap_or((0.0, 0.0)),
+                })
+                .collect(),
+        }
+    }
 }

@@ -1,17 +1,14 @@
-use crate::{
-    runtime::{InternEngineCommand, RuntimeRequest},
-    DBMirror,
-};
+use crate::{runtime::RuntimeRequest, InternEngineCommand, SessionContext, TimerHook};
 
 use super::{
     challenge::{ChallengeEntry, InOpenChallenge},
-    Config, DBEntry, PlayerEntry, ZoneEntry,
+    Config, DBEntry, ZoneEntry,
 };
 use chrono::{self, Duration as Dur, NaiveTime};
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
-use truinlag::*;
+use truinlag::{commands::Error, *};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamEntry {
@@ -26,7 +23,8 @@ pub struct TeamEntry {
     pub locations: Vec<(f64, f64, NaiveTime)>,
     pub challenges: Vec<InOpenChallenge>,
     pub periods: Vec<Period>,
-    pub grace_period_end: Option<chrono::NaiveTime>,
+    #[serde(default)]
+    pub grace_period_end: Option<TimerHook>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,11 +102,8 @@ impl TeamEntry {
             grace_period_end: None,
         }
     }
-    pub fn to_sendable(
-        &self,
-        player_entries: &DBMirror<PlayerEntry>,
-        index: usize,
-    ) -> truinlag::Team {
+
+    pub fn to_sendable(&self, index: usize, context: &SessionContext) -> truinlag::Team {
         truinlag::Team {
             colour: self.colour,
             role: self.role,
@@ -120,7 +115,9 @@ impl TeamEntry {
                 .players
                 .iter()
                 .map(|p| {
-                    player_entries
+                    context
+                        .engine_context
+                        .player_db
                         .get(*p)
                         .expect("PlayerEntry not found in db while making team sendable")
                         .contents
@@ -150,9 +147,9 @@ impl TeamEntry {
                 })
                 .collect(),
             location: self.locations.last().map(|loc| (loc.0, loc.1)),
-            in_grace_period: match self.grace_period_end {
+            in_grace_period: match &self.grace_period_end {
                 None => false,
-                Some(time) => chrono::Local::now().time() <= time,
+                Some(timer) => chrono::Local::now() <= timer.end_time,
             },
         }
     }
@@ -163,37 +160,35 @@ impl TeamEntry {
             .map(|location| (location.0, location.1))
     }
 
-    pub fn start_runner(
-        &mut self,
-        config: &Config,
-        challenge_db: &[DBEntry<ChallengeEntry>],
-        zone_db: &DBMirror<ZoneEntry>,
-    ) {
-        self.reset(config.start_zone);
-        self.generate_challenges(config, challenge_db, zone_db);
+    pub fn start_runner(&mut self, context: &SessionContext) -> Result<(), commands::Error> {
+        self.reset(context)?;
+        self.generate_challenges(context);
+        Ok(())
     }
 
-    pub fn start_catcher(&mut self, config: &Config) {
-        self.reset(config.start_zone);
+    pub fn start_catcher(&mut self, context: &SessionContext) -> Result<(), commands::Error> {
+        self.reset(context)?;
         self.role = TeamRole::Catcher;
+        Ok(())
     }
 
-    fn reset(&mut self, start_zone_id: u64) {
+    pub fn reset(&mut self, context: &SessionContext) -> Result<(), commands::Error> {
         self.challenges = Vec::new();
         self.periods = Vec::new();
         self.locations = Vec::new();
         self.role = TeamRole::Runner;
-        self.zone_id = start_zone_id;
         self.points = 0;
         self.bounty = 0;
+        self.zone_id = context
+            .engine_context
+            .zone_db
+            .find(|z| z.zone == context.config.start_zone)
+            .ok_or(Error::NotFound("config start zone".into()))?
+            .id;
+        Ok(())
     }
 
-    pub fn generate_challenges(
-        &mut self,
-        config: &Config,
-        raw_challenges: &[DBEntry<ChallengeEntry>],
-        zone_entries: &DBMirror<ZoneEntry>,
-    ) {
+    pub fn generate_challenges(&mut self, context: &SessionContext) {
         // Challenge selection is the perhaps most complicated part of the game, so I think it
         // warrants some good commenting. The process for challenge generation differs mainly based
         // on the generation period. There are (currently) 5 of them. In this function, the current
@@ -202,9 +197,15 @@ impl TeamEntry {
         // challenge generation process is completely different from period to period, so the match
         // expression actually makes up almost the entire function body.
 
+        let zone_entries = context.engine_context.zone_db;
+        let config = &context.config;
+        let raw_challenges = context.engine_context.challenge_db.get_all();
         let team_zone = zone_entries
             .get(self.zone_id)
             .expect("team is in a zone that is not in db");
+        let points_to_top = context
+            .top_team_points
+            .map(|p| p.saturating_sub(self.points));
 
         let challenge_set_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
             config
@@ -287,12 +288,11 @@ impl TeamEntry {
         }
 
         let fallback_challenges = self.generate_fallback_challenges(
-            config,
             &filtered_raw_challenges,
-            raw_challenges,
-            zone_entries,
             team_zone.clone(),
             team_zone.clone(),
+            points_to_top,
+            context,
         );
 
         let centre_zone = match zone_entries.find(|z| z.zone == config.centre_zone) {
@@ -327,21 +327,21 @@ impl TeamEntry {
                             // with three challenges anyways.
                             if index == 2 {
                                 c.contents.challenge(
-                                    config,
                                     false,
-                                    zone_entries,
                                     centre_zone.clone(),
                                     team_zone.clone(),
                                     c.id,
+                                    points_to_top,
+                                    context,
                                 )
                             } else {
                                 c.contents.challenge(
-                                    config,
                                     true,
-                                    zone_entries,
                                     centre_zone.clone(),
                                     team_zone.clone(),
                                     c.id,
+                                    points_to_top,
+                                    context,
                                 )
                             }
                         })
@@ -361,12 +361,12 @@ impl TeamEntry {
                     .iter()
                     .map(|c| {
                         c.contents.challenge(
-                            config,
                             true,
-                            zone_entries,
                             centre_zone.clone(),
                             team_zone.clone(),
                             c.id,
+                            points_to_top,
+                            context,
                         )
                     })
                     .collect()
@@ -541,12 +541,12 @@ impl TeamEntry {
                             .iter()
                             .map(|c| {
                                 c.contents.challenge(
-                                    config,
                                     false,
-                                    zone_entries,
                                     centre_zone.clone(),
                                     team_zone.clone(),
                                     c.id,
+                                    points_to_top,
+                                    context,
                                 )
                             })
                             .collect()
@@ -572,12 +572,12 @@ impl TeamEntry {
                         .iter()
                         .map(|c| {
                             c.contents.challenge(
-                                config,
                                 false,
-                                zone_entries,
                                 centre_zone.clone(),
                                 team_zone.clone(),
                                 c.id,
+                                points_to_top,
+                                context,
                             )
                         })
                         .collect()
@@ -591,12 +591,11 @@ impl TeamEntry {
 
     pub(self) fn generate_fallback_challenges(
         &self,
-        config: &Config,
         raw_challenges: &[DBEntry<ChallengeEntry>],
-        backup_challenges: &[DBEntry<ChallengeEntry>],
-        zone_entries: &DBMirror<ZoneEntry>,
         centre_zone: DBEntry<ZoneEntry>,
         team_zone: DBEntry<ZoneEntry>,
+        points_to_top: Option<u64>,
+        context: &SessionContext,
     ) -> Vec<InOpenChallenge> {
         // this function is old, but it still generates the fallback challenges during challenge
         // selection. It is old and ugly, but it's not worth changing (yet), especially since the
@@ -610,17 +609,20 @@ impl TeamEntry {
                     ChallengeType::Kaff | ChallengeType::Ortsspezifisch | ChallengeType::Zoneable
                 )
             })
-            .choose_multiple(&mut thread_rng(), config.num_challenges as usize - 1);
+            .choose_multiple(
+                &mut thread_rng(),
+                context.config.num_challenges as usize - 1,
+            );
         let mut challenges: Vec<InOpenChallenge> = challenges
             .iter()
             .map(|c| {
                 c.contents.challenge(
-                    config,
                     true,
-                    zone_entries,
                     centre_zone.clone(),
                     team_zone.clone(),
                     c.id,
+                    points_to_top,
+                    context,
                 )
             })
             .collect();
@@ -636,13 +638,12 @@ impl TeamEntry {
         challenges.push(smart_choose(
             &mut unspecific_challenges,
             raw_challenges,
-            backup_challenges,
             "choosing the unspecific challenge during fallback generation",
-            config,
             false,
-            zone_entries,
             centre_zone,
             team_zone,
+            points_to_top,
+            context,
         ));
         challenges
     }
@@ -677,29 +678,32 @@ impl TeamEntry {
         &mut self,
         bounty: u64,
         caught_id: usize,
-        config: &Config,
-        challenge_db: &[DBEntry<ChallengeEntry>],
-        zone_db: &DBMirror<ZoneEntry>,
-    ) -> chrono::NaiveTime {
-        self.generate_challenges(config, challenge_db, zone_db);
+        catcher_id: usize,
+        context: &mut SessionContext,
+    ) -> RuntimeRequest {
+        self.generate_challenges(context);
         self.role = TeamRole::Runner;
-        let end_time = chrono::Local::now().time() + config.grace_period_duration;
-        self.grace_period_end = Some(end_time);
+        let (request, timer) = context.engine_context.timer_tracker.timer(
+            context.config.grace_period_duration,
+            InternEngineCommand::TeamLeftGracePeriod {
+                session_id: context.session_id,
+                team_id: catcher_id,
+            },
+        );
+        self.grace_period_end = Some(timer);
         self.points += bounty;
         self.bounty = 0;
         self.new_period(PeriodContext::Catcher {
             caught_team: caught_id,
             bounty,
         });
-        end_time
+        request
     }
 
     pub fn complete_challenge(
         &mut self,
         id: usize,
-        config: &Config,
-        challenge_db: &[DBEntry<ChallengeEntry>],
-        zone_db: &DBMirror<ZoneEntry>,
+        context: &SessionContext,
     ) -> Result<InOpenChallenge, commands::Error> {
         match self.challenges.get(id).cloned() {
             None => Err(commands::Error::NotFound(format!(
@@ -709,7 +713,7 @@ impl TeamEntry {
             Some(completed) => {
                 self.grace_period_end = None;
                 self.points += completed.points;
-                self.bounty += (completed.points as f64 * config.bounty_percentage) as u64;
+                self.bounty += (completed.points as f64 * context.config.bounty_percentage) as u64;
                 self.new_period(PeriodContext::CompletedChallenge {
                     title: completed.title.clone(),
                     description: completed.description.clone(),
@@ -721,7 +725,7 @@ impl TeamEntry {
                 if let Some(zone) = completed.zone {
                     self.zone_id = zone;
                 }
-                self.generate_challenges(config, challenge_db, zone_db);
+                self.generate_challenges(context);
                 Ok(completed)
             }
         }
@@ -732,13 +736,12 @@ impl TeamEntry {
 fn smart_choose(
     challenges: &mut Vec<&DBEntry<ChallengeEntry>>,
     raw_challenges: &[DBEntry<ChallengeEntry>],
-    backup_challenges: &[DBEntry<ChallengeEntry>],
-    context: &str,
-    config: &Config,
+    context_message: &str,
     zone_zoneables: bool,
-    zone_db: &DBMirror<ZoneEntry>,
     centre_zone: DBEntry<ZoneEntry>,
     team_zone: DBEntry<ZoneEntry>,
+    points_to_top: Option<u64>,
+    context: &SessionContext,
 ) -> InOpenChallenge {
     match challenges.iter().enumerate().choose(&mut thread_rng()) {
         None => {
@@ -746,7 +749,7 @@ fn smart_choose(
                 "Engine: {} Not enough challenges, context: {}. \
                 generatig from all uncompleted challenges within the currents sets",
                 chrono::Local::now(),
-                context
+                context_message
             );
             let selected = raw_challenges
                 .choose(&mut thread_rng())
@@ -756,9 +759,12 @@ fn smart_choose(
                         "Engine: {} Not enough challenges, context: {}. \
                         generating from all challenges",
                         chrono::Local::now(),
-                        context
+                        context_message
                     );
-                    backup_challenges
+                    context
+                        .engine_context
+                        .challenge_db
+                        .get_all()
                         .choose(&mut thread_rng())
                         .expect(
                             "There were no raw challenges, \
@@ -767,22 +773,22 @@ fn smart_choose(
                         .clone()
                 });
             selected.contents.challenge(
-                config,
                 zone_zoneables,
-                zone_db,
                 centre_zone,
                 team_zone,
                 selected.id,
+                points_to_top,
+                context,
             )
         }
         Some((i, selected)) => {
             let ret = selected.contents.challenge(
-                config,
                 zone_zoneables,
-                zone_db,
                 centre_zone,
                 team_zone,
                 selected.id,
+                points_to_top,
+                context,
             );
             challenges.remove(i);
             ret
