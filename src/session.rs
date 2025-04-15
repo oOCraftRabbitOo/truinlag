@@ -15,6 +15,8 @@ use truinlag::{
     *,
 };
 
+/// Multiple trainlag games should be able to run in parallel. Each instance that could be running
+/// a game is represented by a session. So, e.g., Family TrainLag, OG TrainLag, etc.
 #[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "session")]
 pub struct Session {
@@ -29,12 +31,18 @@ pub struct Session {
 }
 
 impl Session {
+    /// Retreives the session config.
+    ///
+    /// The session only saves a partial config, i.e. only overwrites for certain values. The
+    /// `config()` method takes the session's partial config and extends it with the default
+    /// values.
     pub fn config(&self) -> Config {
         let mut cfg = Config::default();
         cfg.apply_some(self.config.clone());
         cfg
     }
 
+    /// Creates a new session
     pub fn new(name: String, mode: Mode) -> Self {
         Session {
             name,
@@ -48,6 +56,7 @@ impl Session {
         }
     }
 
+    /// Converts the engine-internal session to a truinlag session
     pub fn to_sendable(&self, id: u64) -> GameSession {
         GameSession {
             name: self.name.clone(),
@@ -56,6 +65,7 @@ impl Session {
         }
     }
 
+    /// Generates the session context from the engine context and the session id
     fn context<'a>(&self, context: EngineContext<'a>, session_id: u64) -> SessionContext<'a> {
         SessionContext {
             engine_context: context,
@@ -65,6 +75,7 @@ impl Session {
         }
     }
 
+    /// Gets called from a timer and makes a team leave its grace period
     pub fn team_left_grace_period(
         &mut self,
         team_id: usize,
@@ -84,6 +95,7 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and manually generates new challenges for a team
     fn generate_team_challenges(
         &mut self,
         id: usize,
@@ -98,6 +110,7 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and manually adds a challenge to a team
     fn add_challenge_to_team(
         &mut self,
         team: usize,
@@ -124,6 +137,7 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and renames a team
     fn rename_team(&mut self, team: usize, new_name: String) -> InternEngineResponsePackage {
         match self.teams.get_mut(team) {
             None => Error(NotFound(format!("team with id {}", team))).into(),
@@ -134,6 +148,7 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and changes a given team's role to hunter
     fn make_team_catcher(
         &mut self,
         id: usize,
@@ -155,6 +170,7 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and changes a given team's role to gatherer
     fn make_team_runner(
         &mut self,
         id: usize,
@@ -176,6 +192,7 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and processes a given players' location update
     fn send_location(&mut self, player: u64, location: (f64, f64)) -> InternEngineResponsePackage {
         match self
             .teams
@@ -198,6 +215,7 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and assigns a player to a team
     fn assign_player_to_team(
         &mut self,
         player: u64,
@@ -241,6 +259,7 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and processes one team catching another
     fn catch(
         &mut self,
         catcher: usize,
@@ -322,6 +341,7 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and processes a team completing a challenge
     fn complete(
         &mut self,
         completer: usize,
@@ -332,14 +352,16 @@ impl Session {
             Some(_) => match self.teams.get_mut(completer) {
                 Some(completer_team) => match completer_team.complete_challenge(completed, context)
                 {
-                    Ok(completed) => EngineResponse {
-                        response_action: Success,
-                        broadcast_action: Some(BroadcastAction::Completed {
-                            completer: completer_team.to_sendable(completer, context),
-                            completed: completed.to_sendable(),
+                    Ok((completed, request)) => InternEngineResponsePackage {
+                        response: InternEngineResponse::DirectResponse(EngineResponse {
+                            response_action: Success,
+                            broadcast_action: Some(BroadcastAction::Completed {
+                                completer: completer_team.to_sendable(completer, context),
+                                completed: completed.to_sendable(),
+                            }),
                         }),
-                    }
-                    .into(),
+                        runtime_requests: request.map(|r| vec![r]),
+                    },
                     Err(err) => Error(err).into(),
                 },
                 None => Error(NotFound(format!("completer team with id {}", completer))).into(),
@@ -348,6 +370,7 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and returns the current session state
     fn get_state(&self, context: &SessionContext) -> InternEngineResponsePackage {
         SendState {
             teams: self
@@ -362,6 +385,7 @@ impl Session {
         .into()
     }
 
+    /// Corresponds to an `EngineAction` and adds a team
     fn add_team(
         &mut self,
         name: String,
@@ -401,11 +425,12 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and starts the game
     fn start(&mut self, context: &mut SessionContext) -> InternEngineResponsePackage {
         match self.game {
             Some(_) => Error(GameInProgress).into(),
             None => {
-                // Setup teams
+                // Set up teams
                 let num_catchers = self.config().num_catchers as usize;
                 if num_catchers >= self.teams.len() {
                     return Error(BadData(format!(
@@ -422,7 +447,6 @@ impl Session {
                     .choose_multiple(&mut thread_rng(), num_catchers);
                 let runner_ids: Vec<usize> =
                     team_ids.filter(|i| !catcher_ids.contains(i)).collect();
-
                 let config = self.config();
                 for id in catcher_ids {
                     if let Err(err) = self.teams[id].start_catcher(context) {
@@ -435,7 +459,7 @@ impl Session {
                     }
                 }
 
-                // Setup alarm
+                // Set up alarm
                 let (request, timer) = context.engine_context.timer_tracker.alarm(
                     chrono::Local::now().with_time(config.end_time).unwrap(),
                     InternEngineCommand::Command(EngineCommand {
@@ -444,7 +468,10 @@ impl Session {
                     }),
                 );
 
-                // Setup game
+                // Set up game
+                // This has to be done last, as many commands' runnability depends on whether a
+                // game is running. Some of the previous steps can return errors, so they are done
+                // earlier.
                 let now = chrono::Local::now();
                 let today = now.date_naive();
                 let game = InGame {
@@ -455,6 +482,7 @@ impl Session {
                 };
                 self.game = Some(game.clone());
 
+                // Return response
                 InternEngineResponsePackage {
                     response: EngineResponse {
                         response_action: Success,
@@ -475,18 +503,26 @@ impl Session {
         }
     }
 
+    /// Corresponds to an `EngineAction` and stops the game. This is called automatically by a
+    /// timer that is set up when starting the game.
     fn stop(&mut self, context: &mut SessionContext) -> InternEngineResponsePackage {
+        // check whether game is actually running
         if self.game.is_none() {
             return Error(GameNotRunning).into();
         }
 
+        // cancel game end timer
         let mut requests = Vec::new();
+        // this check is unnecessary, since it was done above already, but it avoids a clone
         if let Some(game) = &self.game {
             requests.push(game.timer.cancel_request());
         }
+
+        // extract and save past game
         let past_game = PastGame::new_now(self.game.take().unwrap(), self.teams.clone());
         context.engine_context.past_game_db.add(past_game);
 
+        // reset teams
         for team in &mut self.teams {
             let _ = team.reset(context);
             // we can ignore the potential error here, since the start zone is not relevant when
@@ -496,6 +532,7 @@ impl Session {
             }
         }
 
+        // return response
         InternEngineResponsePackage {
             response: InternEngineResponse::DirectResponse(EngineResponse {
                 response_action: Success,
@@ -505,6 +542,7 @@ impl Session {
         }
     }
 
+    /// Compiles all events from all teams into a list of events ordered by time
     fn gather_events(&self) -> Vec<Event> {
         let mut events = Vec::new();
         for (team_id, team) in self.teams.iter().enumerate() {
@@ -552,10 +590,17 @@ impl Session {
         events
     }
 
+    /// Corresponds to an `EngineAction` and returns all events in a list ordered by time
     fn get_events(&self) -> InternEngineResponsePackage {
         SendEvents(self.gather_events()).into()
     }
 
+    /// The core method of the session that processes commands with sessions.
+    ///
+    /// The method takes a command to process, as well as a session id. This should be the id of
+    /// the session that this method is called on and it is required because that id is not
+    /// actually known to the session. Additionally, context of type `EngineContext` is required in
+    /// order to access challenges, zones, players, etc.
     pub fn vroom(
         &mut self,
         command: EngineAction,

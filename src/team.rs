@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::min;
 use truinlag::{commands::Error, *};
 
+/// The representation of a team in a running or future game in the db
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamEntry {
     pub name: String,
@@ -19,7 +20,7 @@ pub struct TeamEntry {
     pub colour: Colour,
     pub points: u64,
     pub bounty: u64,
-    pub zone_id: u64,
+    pub current_zone_id: u64,
     pub locations: Vec<(f64, f64, NaiveTime)>,
     pub challenges: Vec<InOpenChallenge>,
     pub periods: Vec<Period>,
@@ -27,6 +28,7 @@ pub struct TeamEntry {
     pub grace_period_end: Option<TimerHook>,
 }
 
+/// The representation of a thing that a team did in a running game in the db
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Period {
     pub context: PeriodContext,
@@ -35,6 +37,7 @@ pub struct Period {
     pub end_time: chrono::NaiveTime,
 }
 
+/// Context for what a team did in a period
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PeriodContext {
     Trophy {
@@ -59,20 +62,24 @@ pub enum PeriodContext {
     },
 }
 
+// this is implemented to be able to sort periods by end time
 impl PartialEq for Period {
     fn eq(&self, other: &Self) -> bool {
         self.end_time.eq(&other.end_time)
     }
 }
 
+// this is implemented to be able to sort periods by end time
 impl Eq for Period {}
 
+// this is implemented to be able to sort periods by end time
 impl PartialOrd for Period {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
+// this is implemented to be able to sort periods by end time
 impl Ord for Period {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.end_time.cmp(&other.end_time)
@@ -98,11 +105,12 @@ impl TeamEntry {
             bounty: 0,
             locations: Vec::new(),
             periods: Vec::new(),
-            zone_id: config.start_zone,
+            current_zone_id: config.start_zone,
             grace_period_end: None,
         }
     }
 
+    /// Converts the engine-internal `TeamEntry` type into a sendable truinlag `Team` type
     pub fn to_sendable(&self, index: usize, context: &SessionContext) -> truinlag::Team {
         truinlag::Team {
             colour: self.colour,
@@ -154,24 +162,43 @@ impl TeamEntry {
         }
     }
 
+    /// Returns the team's current location
     pub fn location(&self) -> Option<(f64, f64)> {
         self.locations
             .last()
             .map(|location| (location.0, location.1))
     }
 
+    /// Resets the team and has it start out as a gatherer team
+    ///
+    /// # Errors
+    ///
+    /// The team's zone has to be the starting zone. If that can't be found, a `NotFound` error is
+    /// returned.
     pub fn start_runner(&mut self, context: &SessionContext) -> Result<(), commands::Error> {
         self.reset(context)?;
         self.generate_challenges(context);
         Ok(())
     }
 
+    /// Resets the team and has it start out as a hunter team
+    ///
+    /// # Errors
+    ///
+    /// The team's zone has to be the starting zone. If that can't be found, a `NotFound` error is
+    /// returned.
     pub fn start_catcher(&mut self, context: &SessionContext) -> Result<(), commands::Error> {
         self.reset(context)?;
         self.role = TeamRole::Catcher;
         Ok(())
     }
 
+    /// Resets the team's points, bounty and other in game attributes.
+    ///
+    /// # Errors
+    ///
+    /// The team's zone has to be the starting zone. If that can't be found, a `NotFound` error is
+    /// returned.
     pub fn reset(&mut self, context: &SessionContext) -> Result<(), commands::Error> {
         self.challenges = Vec::new();
         self.periods = Vec::new();
@@ -179,7 +206,7 @@ impl TeamEntry {
         self.role = TeamRole::Runner;
         self.points = 0;
         self.bounty = 0;
-        self.zone_id = context
+        self.current_zone_id = context
             .engine_context
             .zone_db
             .find(|z| z.zone == context.config.start_zone)
@@ -188,6 +215,7 @@ impl TeamEntry {
         Ok(())
     }
 
+    /// Generates new challenges for the team
     pub fn generate_challenges(&mut self, context: &SessionContext) {
         // Challenge selection is the perhaps most complicated part of the game, so I think it
         // warrants some good commenting. The process for challenge generation differs mainly based
@@ -201,7 +229,7 @@ impl TeamEntry {
         let config = &context.config;
         let raw_challenges = context.engine_context.challenge_db.get_all();
         let team_zone = zone_entries
-            .get(self.zone_id)
+            .get(self.current_zone_id)
             .expect("team is in a zone that is not in db");
         let points_to_top = context
             .top_team_points
@@ -383,12 +411,24 @@ impl TeamEntry {
                 // challenges are requested, all challenges will be generated the same way as
                 // during the specific period save one which will be unspecific.
                 if config.num_challenges == 3 {
+                    let regio_probability = match config.regio_ratio {
+                        ..=0.0 => 0.0,
+                        1.0.. => 1.0,
+                        other => other,
+                    };
                     let chosen_challenges = [
-                        filtered_raw_challenges
-                            .iter()
-                            .filter(specific_filter)
-                            .filter(near_filter)
-                            .choose(&mut thread_rng()),
+                        if thread_rng().gen_bool(regio_probability) {
+                            filtered_raw_challenges
+                                .iter()
+                                .filter(regio_filter)
+                                .choose(&mut thread_rng())
+                        } else {
+                            filtered_raw_challenges
+                                .iter()
+                                .filter(specific_filter)
+                                .filter(near_filter)
+                                .choose(&mut thread_rng())
+                        },
                         filtered_raw_challenges
                             .iter()
                             .filter(specific_filter)
@@ -435,10 +475,10 @@ impl TeamEntry {
                             && max_kaff_filter(c)
                     };
                     let perim_far_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-                        ((max_perim / 2..max_perim).contains(&c.contents.distance(&centre_zone))
-                            && specific_filter(c)
-                            && max_kaff_filter(c))
-                            || regio_filter(c)
+                        specific_filter(c)
+                            && max_kaff_filter(c)
+                            && (max_perim / 2..max_perim)
+                                .contains(&c.contents.distance(&centre_zone))
                     };
                     let chosen_challenges = [
                         filtered_raw_challenges
@@ -477,10 +517,10 @@ impl TeamEntry {
                             && max_kaff_filter(c)
                     };
                     let perim_far_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-                        ((max_perim / 2..max_perim).contains(&c.contents.distance(&centre_zone))
-                            && specific_filter(c)
-                            && max_kaff_filter(c))
-                            || regio_filter(c)
+                        specific_filter(c)
+                            && max_kaff_filter(c)
+                            && (max_perim / 2..max_perim)
+                                .contains(&c.contents.distance(&centre_zone))
                     };
                     let mut chosen_challenges = [
                         filtered_raw_challenges
@@ -589,6 +629,9 @@ impl TeamEntry {
         self.challenges.shuffle(&mut thread_rng());
     }
 
+    /// Some weird bad code that still works and is used in challenge generation. Will try to
+    /// generate some fallback challenges at any cost, and if things go wrong, those challenges may
+    /// be kind of broken (but that is to be expected).
     pub(self) fn generate_fallback_challenges(
         &self,
         raw_challenges: &[DBEntry<ChallengeEntry>],
@@ -648,6 +691,7 @@ impl TeamEntry {
         challenges
     }
 
+    /// Adds a new period with the provided context to the team with the end time being now
     fn new_period(&mut self, context: PeriodContext) {
         self.periods.push(Period {
             context,
@@ -663,6 +707,7 @@ impl TeamEntry {
         });
     }
 
+    /// Sets all the values inside that team that need to be set when it gets caught
     pub fn be_caught(&mut self, catcher_id: usize) {
         self.grace_period_end = None;
         self.challenges.clear();
@@ -674,6 +719,8 @@ impl TeamEntry {
         self.bounty = 0;
     }
 
+    /// Sets all the values inside that team that need to be set when it has caught another team.
+    /// Returns a `RuntimeRequest` that starts the grace period timer.
     pub fn have_caught(
         &mut self,
         bounty: u64,
@@ -700,18 +747,24 @@ impl TeamEntry {
         request
     }
 
+    /// Sets all the values inside the team that need to be set if it just completed a challenge.
+    /// Returns the completed challenge and, optionally, a `RuntimeRequest` that cencels the grace
+    /// period end timer.
     pub fn complete_challenge(
         &mut self,
         id: usize,
         context: &SessionContext,
-    ) -> Result<InOpenChallenge, commands::Error> {
+    ) -> Result<(InOpenChallenge, Option<RuntimeRequest>), commands::Error> {
         match self.challenges.get(id).cloned() {
             None => Err(commands::Error::NotFound(format!(
                 "challenge with id/index {}",
                 id
             ))),
             Some(completed) => {
-                self.grace_period_end = None;
+                let request = self
+                    .grace_period_end
+                    .take()
+                    .map(|hook| hook.cancel_request());
                 self.points += completed.points;
                 self.bounty += (completed.points as f64 * context.config.bounty_percentage) as u64;
                 self.new_period(PeriodContext::CompletedChallenge {
@@ -723,15 +776,18 @@ impl TeamEntry {
                     id: completed.id,
                 });
                 if let Some(zone) = completed.zone {
-                    self.zone_id = zone;
+                    self.current_zone_id = zone;
                 }
                 self.generate_challenges(context);
-                Ok(completed)
+                Ok((completed, request))
             }
         }
     }
 }
 
+/// Some weird bad code that still works and is used in challenge generation. Will try to
+/// generate some fallback challenges at any cost, and if things go wrong, those challenges may
+/// be kind of broken (but that is to be expected).
 #[allow(clippy::too_many_arguments)]
 fn smart_choose(
     challenges: &mut Vec<&DBEntry<ChallengeEntry>>,
@@ -796,6 +852,7 @@ fn smart_choose(
     }
 }
 
+/// Challenge generation period
 enum GenerationPeriod {
     Specific,
     Normal,
@@ -804,6 +861,7 @@ enum GenerationPeriod {
     EndGame,
 }
 
+/// Gets the currently applicable `GenerationPeriod` from the current time and a config.
 fn get_period(config: &Config) -> GenerationPeriod {
     let mut now = chrono::Local::now().time();
     if now <= config.start_time + chrono::Duration::minutes(config.specific_minutes as i64) {
@@ -833,6 +891,7 @@ fn get_period(config: &Config) -> GenerationPeriod {
     }
 }
 
+/// It lerps
 fn lerp(min: u64, max: u64, t: f64) -> u64 {
     (min as f64 * (1_f64 - t) + max as f64) as u64
 }

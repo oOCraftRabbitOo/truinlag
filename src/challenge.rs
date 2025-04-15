@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use truinlag::*;
 
+/// The representation of a challenge set inside the db
 #[derive(Debug, Clone, Collection, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[collection(name = "challenge set")]
 pub struct ChallengeSetEntry {
@@ -20,6 +21,8 @@ pub struct ChallengeSetEntry {
 }
 
 impl ChallengeSetEntry {
+    /// Converts the engine-internal `ChallengeSetEntry` type into a sendable truinlag
+    /// `ChallengeSet` type
     pub fn to_sendable(&self, id: u64) -> ChallengeSet {
         ChallengeSet {
             name: self.name.clone(),
@@ -28,6 +31,7 @@ impl ChallengeSetEntry {
     }
 }
 
+/// The representation of a raw challenge inside the db
 #[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "challenge", views = [UnspecificChallengeEntries, SpecificChallengeEntries, GoodChallengeEntries])]
 pub struct ChallengeEntry {
@@ -63,6 +67,7 @@ pub struct ChallengeEntry {
 }
 
 impl ChallengeEntry {
+    /// Calculates the distance to a challenge from a provided zone
     pub fn distance(&self, from: &DBEntry<ZoneEntry>) -> u64 {
         match self.closest_zone(from) {
             Some(zone) => *from.contents.minutes_to.get(&zone).unwrap_or(&0),
@@ -70,6 +75,7 @@ impl ChallengeEntry {
         }
     }
 
+    /// Selects the zone from the challenge's zones that is the closest from a provided zone
     pub fn closest_zone(&self, from: &DBEntry<ZoneEntry>) -> Option<u64> {
         self.zone
             .iter()
@@ -96,6 +102,7 @@ impl ChallengeEntry {
             .cloned()
     }
 
+    /// Converts the engine-internal `ChallengeEntry` type into a sendable truinlag `RawChallenge` type
     pub fn to_sendable(
         &self,
         id: u64,
@@ -154,6 +161,7 @@ impl ChallengeEntry {
         })
     }
 
+    /// Generates points for and returns an open challenge
     pub fn challenge(
         &self,
         zone_zoneables: bool,
@@ -396,6 +404,7 @@ impl From<InputChallenge> for ChallengeEntry {
     }
 }
 
+/// A view that is never actually used anywhere but it's still here... TODO: remove this?
 #[derive(Debug, Clone, View, ViewSchema)]
 #[view(collection = ChallengeEntry, key = bool, value = u64, name = "unspecific")]
 struct UnspecificChallengeEntries;
@@ -427,6 +436,7 @@ impl CollectionMapReduce for UnspecificChallengeEntries {
     }
 }
 
+/// A view that is never actually used anywhere but it's still here... TODO: remove this?
 #[derive(Debug, Clone, View, ViewSchema)]
 #[view(collection = ChallengeEntry, key = bool, value = u64, name = "good")]
 struct GoodChallengeEntries;
@@ -450,6 +460,7 @@ impl CollectionMapReduce for GoodChallengeEntries {
     }
 }
 
+/// A view that is never actually used anywhere but it's still here... TODO: remove this?
 #[derive(Debug, Clone, View, ViewSchema)]
 #[view(collection = ChallengeEntry, key = bool, value = u64, name = "specific")]
 struct SpecificChallengeEntries;
@@ -481,6 +492,7 @@ impl CollectionMapReduce for SpecificChallengeEntries {
     }
 }
 
+/// The representation of an open challenge inside the db
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InOpenChallenge {
     pub id: u64,
@@ -492,6 +504,7 @@ pub struct InOpenChallenge {
 }
 
 impl InOpenChallenge {
+    /// Determines whether the challenge can be completed
     #[allow(dead_code)]
     pub fn completable(&self) -> bool {
         match &self.action {
@@ -506,6 +519,7 @@ impl InOpenChallenge {
         }
     }
 
+    /// Converts the engine-internal `InOpenChallenge` type into a sendable truinlag `Challenge` type
     pub fn to_sendable(&self) -> truinlag::Challenge {
         truinlag::Challenge {
             title: self.title.clone(),
@@ -521,6 +535,7 @@ impl PartialEq for InOpenChallenge {
     }
 }
 
+/// A special quirk a challenge may have
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ChallengeAction {
     UncompletableMinutes(chrono::DateTime<chrono::Local>),

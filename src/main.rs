@@ -23,12 +23,16 @@ use truinlag::{
     *,
 };
 
+/// this just starts the manager from the runtime :)
 #[tokio::main]
 async fn main() -> Result<()> {
     manager().await.unwrap();
     Ok(())
 }
 
+/// This is to keep track of timers. A `TimerHook` represents a timer that should be currently
+/// running. This is useful to cancel the timer if it is no longer needed or to restart it if it is
+/// not actually running.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TimerHook {
     payload: InternEngineCommand,
@@ -36,6 +40,7 @@ pub struct TimerHook {
     id: u64,
 }
 
+// This implementation exists for db backwards compatibility.
 impl Default for TimerHook {
     fn default() -> Self {
         Self {
@@ -50,10 +55,12 @@ impl Default for TimerHook {
 }
 
 impl TimerHook {
+    /// Returns a `RuntimeRequest` that cancels the timer.
     fn cancel_request(&self) -> RuntimeRequest {
         RuntimeRequest::CancelTimer(self.id)
     }
 
+    /// Returns a `RuntimeRequest` that starts the timer.
     fn create_request(&self) -> RuntimeRequest {
         RuntimeRequest::CreateAlarm {
             time: self.end_time,
@@ -63,16 +70,25 @@ impl TimerHook {
     }
 }
 
+/// The `TimerTracker` is used to create new timers.
+///
+/// Each timer needs to have a unique id for it to be able to be cancelled. This struct contains
+/// a simple counter that is incremented whenever a timer is created using it.
 #[derive(Debug)]
 pub struct TimerTracker {
     current_id: u64,
 }
 
 impl TimerTracker {
+    /// Creates a new `TimerTracker`.
     fn new() -> Self {
         TimerTracker { current_id: 0 }
     }
 
+    /// Returns a `RuntimeRequest` that creates a new alarm and a `TimerHook` that represents it.
+    ///
+    /// An alarm in truinlag is a request to the runtime to send an `InternEngineCommand` to the
+    /// engine at a specific time. This method is used to create such alarms.
     fn alarm(
         &mut self,
         time: chrono::DateTime<chrono::Local>,
@@ -93,6 +109,10 @@ impl TimerTracker {
         )
     }
 
+    /// Returns a `RuntimeRequest` that creates a new timer and a `TimerHook` that represents it.
+    ///
+    /// A timer in truinlag is a request to the runtime to send an `InternEngineCommand` to the
+    /// engine at a specific time. This method is used to create such timers.
     fn timer(
         &mut self,
         duration: chrono::TimeDelta,
@@ -103,6 +123,8 @@ impl TimerTracker {
     }
 }
 
+/// A grouping of references to data contained within the engine. Its primary purpose is to make
+/// function signatures smaller.
 #[derive(Debug)]
 pub struct EngineContext<'a> {
     player_db: &'a DBMirror<PlayerEntry>,
@@ -112,6 +134,8 @@ pub struct EngineContext<'a> {
     timer_tracker: &'a mut TimerTracker,
 }
 
+/// A grouping of data contained within the relevant session and the engine. Its primary purpose is
+/// to make function signatures smaller.
 #[derive(Debug)]
 pub struct SessionContext<'a> {
     engine_context: EngineContext<'a>,
@@ -120,6 +144,7 @@ pub struct SessionContext<'a> {
     config: Config,
 }
 
+/// An owned copy of an entry in the database.
 #[derive(Clone, Debug)]
 pub struct ClonedDBEntry<T>
 where
@@ -130,6 +155,7 @@ where
     pub contents: T,
 }
 
+/// An entry in the database.
 #[derive(Debug, Clone, Copy)]
 pub struct DBEntry<'a, T>
 where
@@ -145,6 +171,7 @@ where
     T: SerializedCollection<Contents = T, PrimaryKey = u64>,
     T: Clone,
 {
+    /// Creates an owned copy of the database entry.
     pub fn clone_contents(&self) -> ClonedDBEntry<T> {
         ClonedDBEntry {
             id: self.id,
@@ -153,6 +180,7 @@ where
     }
 }
 
+/// A mutable entry in the database.
 #[derive(Debug)]
 pub struct MutDBEntry<'a, T>
 where
@@ -168,6 +196,7 @@ where
     T: SerializedCollection<Contents = T, PrimaryKey = u64>,
     T: Clone,
 {
+    /// Creates an owned copy of the database entry.
     pub fn clone_contents(&self) -> ClonedDBEntry<T> {
         ClonedDBEntry {
             id: self.id,
@@ -176,6 +205,8 @@ where
     }
 }
 
+/// Used to remember changes in the db mirrors for less expensive autosaves and to enable
+/// deletions.
 #[derive(Clone, Debug)]
 enum DBStatus {
     Unchanged,
@@ -184,6 +215,23 @@ enum DBStatus {
     BeingDeleted,
 }
 
+/// A mirror of a database collection that contains all entries (in memory!).
+///
+/// The truinlag engine needs to run strictly synchronously and its primary purpose is to
+/// manipulate game data. If the data was stored in the database, the access would take a very long
+/// time and the engine would be very slow. Since simple information about the game (like player
+/// names and teams and point counts etc.) is very small, it's all stored in memory for much
+/// quicker access and periodically written to disk in a separate task. The `DBMirror` struct
+/// exists to facilitate this.
+///
+/// The `DBMirror` contains all database items and their status. Database items can be retreived
+/// from the mirror and if an item is retreived mutably, its status is set to `Edited`. The autosave
+/// will then extract all changes from the mirror, which yields all changed entries and sets their
+/// status back to `Unchanged`. Items can also be deleted from the db. Deleted items are retained,
+/// but have their status changed to `ToBeDeleted`. When the autosave extracts all changes, their
+/// status is further changed to `BeingDeleted`. This is to prevent a desync between the database
+/// and the mirror, which could occur of there was an error while deleting the file from the db.
+/// The deleted entries are only deleted from the mirror once confirmation is received.
 #[derive(Clone, Debug)]
 pub struct DBMirror<T>
 where
@@ -198,6 +246,7 @@ where
     T: SerializedCollection<Contents = T, PrimaryKey = u64>,
     T: Clone,
 {
+    /// Loads a collection's contents from the db and creates a mirror.
     fn from_db(db: &Database) -> Self {
         let db_entries = T::all(db).query().unwrap();
         let max_id = db_entries.iter().fold(
@@ -212,8 +261,10 @@ where
         Self { entries }
     }
 
+    /// Gets the item with the requested id from the db. Returns `None` if the item doesn't exist.
     fn get(&self, id: u64) -> Option<DBEntry<T>> {
         match self.entries.get(id as usize) {
+            // could be optimised with binary search?
             Some(Some((contents, status))) => match status {
                 DBStatus::Unchanged | DBStatus::Edited => Some(DBEntry { id, contents }),
                 DBStatus::ToBeDeleted | DBStatus::BeingDeleted => None,
@@ -223,6 +274,7 @@ where
         }
     }
 
+    /// Mutably gets the item with the requested id from the db. Returns `None` if the item doesn't exist.
     fn get_mut(&mut self, id: u64) -> Option<MutDBEntry<T>> {
         match self.entries.get_mut(id as usize) {
             Some(Some((contents, status))) => match status {
@@ -237,6 +289,7 @@ where
         }
     }
 
+    /// Tests if any entry in the collection matches a predicate.
     fn any(&self, mut predicate: impl FnMut(&T) -> bool) -> bool {
         self.entries.iter().any(|entry| match entry {
             None => false,
@@ -244,13 +297,14 @@ where
         })
     }
 
+    /// Searches for an entry in the collection that satisfies a predicate.
     fn find(&self, mut predicate: impl FnMut(&T) -> bool) -> Option<DBEntry<T>> {
         self.entries
             .iter()
             .enumerate()
             .find(|(_, entry)| match entry {
                 None => false,
-                Some((item, _)) => predicate(item),
+                Some((item, _)) => predicate(item), // TODO: return false if deleted
             })
             .map(|(index, entry)| DBEntry {
                 id: index as u64,
@@ -261,23 +315,29 @@ where
             })
     }
 
+    /// Searches for an entry in the collection that satisfies a predicate. (mutably)
     fn find_mut(&mut self, mut predicate: impl FnMut(&T) -> bool) -> Option<MutDBEntry<T>> {
-        self.entries
+        match self
+            .entries
             .iter_mut()
             .enumerate()
             .find(|(_, entry)| match entry {
                 None => false,
-                Some((item, _)) => predicate(item),
-            })
-            .map(|(index, entry)| MutDBEntry {
-                id: index as u64,
-                contents: match entry {
-                    None => panic!(),
-                    Some((item, _)) => item,
-                },
-            })
+                Some((item, _)) => predicate(item), // TODO: return false if deleted
+            }) {
+            Some((index, entry)) => {
+                let contents = entry.as_mut().unwrap();
+                contents.1 = DBStatus::Edited;
+                Some(MutDBEntry {
+                    id: index as u64,
+                    contents: &mut contents.0,
+                })
+            }
+            None => None,
+        }
     }
 
+    /// Gets all entries from the collection in a `Vec`.
     fn get_all(&self) -> Vec<DBEntry<T>> {
         self.entries
             .iter()
@@ -295,16 +355,17 @@ where
             .collect()
     }
 
+    /// Adds a new entry to the collection.
     fn add(&mut self, thing: T) {
         let new_entry = Some((thing, DBStatus::Edited));
         let mut iter = self.entries.iter_mut();
-        //iter.next(); // May be necessary if BonsaiDB doesn't support zero-indexing
         match iter.find(|e| e.is_none()) {
             Some(entry) => *entry = new_entry,
             None => self.entries.push(new_entry),
         }
     }
 
+    /// Deletes an entry from the collection
     fn delete(&mut self, id: u64) -> Result<(), ()> {
         match self.entries.get_mut(id as usize) {
             None => Err(()),
@@ -319,12 +380,14 @@ where
         }
     }
 
+    /// Deletes all entries from the collection
     fn delete_all(&mut self) {
         for entry in self.entries.iter_mut().flatten() {
             entry.1 = DBStatus::ToBeDeleted;
         }
     }
 
+    /// Extracts all changes in the collection for saving them to disk.
     fn extract_changes(&mut self) -> Vec<ClonedDBEntry<T>> {
         let mut changes = Vec::new();
         for (index, entry) in &mut self.entries.iter_mut().enumerate() {
@@ -341,6 +404,7 @@ where
         changes
     }
 
+    /// Confirms deletions.
     fn clear_pending_deletions(&mut self) {
         for entry in &mut self.entries {
             if let Some((_, status)) = entry {
@@ -351,6 +415,7 @@ where
         }
     }
 
+    /// Extracts all deletions in the collection for saving them to disk.
     fn extract_deletions(&mut self) -> Vec<u64> {
         let mut deletions = Vec::new();
         for (index, entry) in &mut self.entries.iter_mut().enumerate() {
@@ -364,85 +429,240 @@ where
         deletions
     }
 
+    /// Returns whether the collection is empty.
     fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 }
 
+/// Contains config values for the game.
+///
+/// A `Config` is always a complete set of configuration values that can be used to run the game.
+/// Since many of the values are very specific, obscure and unlikely to need change, a
+/// `PartialConfig` can store overrides for only some of the values. A `PartialConfig` is saved
+/// per session and can be made into a full config using `Config`'s implementation of `Default`.
 #[derive(Partial, Debug, Clone, Serialize, Deserialize)]
 #[partially(derive(Debug, Clone, Serialize, Deserialize, Default))]
 pub struct Config {
     // Pointcalc
+    /// At the very end of the point calculation process, the amount of points calculated is
+    /// randomised a bit, so that the points don't look to sterile. This is done with a normal
+    /// distribution where the standard deviation is a fraction of the points calculated. This
+    /// value corresponds to that fraction.
+    /// *Recommended Value:* **0.05**
     pub relative_standard_deviation: f64,
+    /// The Kaffskala is system to measure how out-of-the-way and hard to reach a place is. The
+    /// more kaffig a place is, the more points it should give. Kaffness ranges from 1 to 6.
+    /// *Recommended Value:* **90**
     pub points_per_kaffness: u64,
+    /// The transit grade is a system to measure how well-accessible a place is by transit. It is
+    /// [provided by the canton of Zürich](https://geo.zh.ch). Less accessible places should give
+    /// more points. Transit grade ranges from 1 to 6.
+    /// *Recommended Value:* **20**
     pub points_per_grade: u64,
+    /// For certain challenges, teams need to walk. Such challenges should give more points,
+    /// depending on how long the team has to walk to solve it.
+    /// *Recommended Value:* **10**
     pub points_per_walking_minute: u64,
+    /// For certain challenges, teams have to wait around. Such challenges should give more points,
+    /// depending on the how long the team has to wait.
+    /// *Recommended Value:* **10**
     pub points_per_stationary_minute: u64,
-    // the points p for minutes travelled t are calculated based on the exponent e and the
-    // multiplier m using the formula $p = m * (t^e)$.
+    /// Since challenges are selected randomly, some challenges may be further from the team than
+    /// others. The longer the team has to travel, the more points the challenge should give.
+    /// The points p for minutes travelled t are calculated based on the exponent e and the
+    /// multiplier m using the formula $p = m * (t^e)$.
+    /// *Recommended Value:* **1.4**
     pub travel_minutes_exponent: f32,
+    /// Since challenges are selected randomly, some challenges may be further from the team than
+    /// others. The longer the team has to travel, the more points the challenge should give.
+    /// The points p for minutes travelled t are calculated based on the exponent e and the
+    /// multiplier m using the formula $p = m * (t^e)$.
+    /// *Recommended Value:* **3.0**
     pub travel_minutes_multiplier: f32,
+    /// Zoneables get points like unspecific challenges. If they are made to be specific, they
+    /// should receive a boost in points.
+    /// *Recommended Value:* **100**
     pub points_for_zoneable: u64,
+    /// Stations that, once reached, have only one way back, should get a boost in points.
+    /// *Recommended Value:* **50**
     pub zkaff_points_for_dead_end: u64,
-    // points p for station distance s (in metres) are calculated based on the divisor d using the
-    // formula $p = \frac{s}{d}$.
+    /// Stations in Zürich should get more points depending on how far from the closest train
+    /// station they are.
+    /// Points p for station distance s (in metres) are calculated based on the divisor d using the
+    /// formula $p = \frac{s}{d}$.
+    /// *Recommended Value:* **20**
     pub zkaff_station_distance_divisor: u64,
+    /// Stations in Zürich should get more points depending on how long it takes to get to HB.
+    /// *Recommended Value:* **5**
     pub zkaff_points_per_minute_to_hb: u64,
-    // points p for departures d (per hour) are calculated based on the exponent e, the base b and
-    // the multiplier m using the formula $p = m(b-d^e)$.
+    /// Stations in Zürich should get more points depending on how few departures they have.
+    /// Points p for departures d (per hour) are calculated based on the exponent e, the base b and
+    /// the multiplier m using the formula $p = m(b-d^e)$.
+    /// *Recommended Value:* **1/3**
     pub zkaff_departures_exponent: f32,
+    /// Stations in Zürich should get more points depending on how few departures they have.
+    /// Points p for departures d (per hour) are calculated based on the exponent e, the base b and
+    /// the multiplier m using the formula $p = m(b-d^e)$.
+    /// *Recommended Value:* **7.0**
     pub zkaff_departures_base: f32,
+    /// Stations in Zürich should get more points depending on how few departures they have.
+    /// Points p for departures d (per hour) are calculated based on the exponent e, the base b and
+    /// the multiplier m using the formula $p = m(b-d^e)$.
+    /// *Recommended Value:* **32.0**
     pub zkaff_departures_multiplier: f32,
 
     // underdog system
+    /// Teams that are far behind first place should get a subtle boost in points. The starting
+    /// difference determines how far behind a team must be for the boost to start to kick in.
+    /// *Recommended Value:* **1000**
     pub underdog_starting_difference: u64,
+    /// Teams that are far behind first place should get a subtle boost in points. For each 1000
+    /// points they are behind, their challenges should give a fraction of their initial point
+    /// count more points.
+    /// *Recommended Value:* **0.25**
     pub underdog_multiplyer_per_1000: f32,
 
     // perimeter system
+    /// While the perimeter tries to limit the playing area, teams shouldn't get challenges that
+    /// are too out-of-the-way anymore. During the perimeter period, the kaffness of challenges
+    /// should be limited to a certain maximum (inclusive).
+    /// *Recommended Value:* **4**
     pub perim_max_kaff: u64,
+    /// The perimeter period tries to slowly limit the playing area. In the beginning, only
+    /// challenges that are very far (in terms of travel time in minutes) from HB should be
+    /// discarded and at the end, only relatively close challenges should remain.
+    /// *Recommended Value:* **20..61**
     pub perim_distance_range: std::ops::Range<u64>,
 
     // distances
+    /// During normal period, one challenge generated should be close by. This limits challenges to
+    /// ones that are a certain number of minutes in terms of travel time away.
+    /// *Recommended Value:* **0..26**
     pub normal_period_near_distance_range: std::ops::Range<u64>,
+    /// During normal period, one challenge generated should be far away. This limits challenges to
+    /// ones that are a certain number of minutes in terms of travel time away.
+    /// *Recommended Value:* **40..71**
     pub normal_period_far_distance_range: std::ops::Range<u64>,
 
     // Zonenkaff
+    /// Zones that are connected to fewer than 6 zones should give more points depending on how
+    /// many fewer than 6 there are.
+    /// *Recommended Value:* **15**
     pub points_per_connected_zone_less_than_6: u64,
+    /// Zones should give more points depending on how badly they are connected. The bad
+    /// connectivity index i is calculated with the number of connections the zone has c using the
+    /// formula $i = 6 - sqrt{c}$.
+    /// *Recommended Value:* **25**
     pub points_per_bad_connectivity_index: u64,
+    /// Zones that have no train running through should give more points.
+    /// *Recommended Value:* **30**
     pub points_for_no_train: u64,
+    /// Zones that are very inaccessible for some miscellaneous reason should give more points.
+    /// *Recommended Value:* **50**
     pub points_for_mongus: u64,
 
     // challenge generation
+    /// The centre zone is the zone that the game converges to during its later hours. It should be
+    /// the same as the one containing all the ZKaff challenges, so zone 110.
+    /// *Recommended Value:* **110**
     pub centre_zone: u64,
+    /// The challenge sets the game should be played with. Depends on the challenge sets present in
+    /// the db, so check those before setting this value.
+    /// *Recommended Value:* **¯\\\_\(ツ\)\_/¯**
     pub challenge_sets: Vec<u64>,
+    /// How many challenges gatherers should be able to choose from. The game design, as well as
+    /// the challenge selection algorithm are finely tuned for *3* challenges, but technically any
+    /// value >= 2 should work.
+    /// *Recommended Value:* **3**
     pub num_challenges: u64,
+    /// Some normal period far challenges should be replaced with regionspecific ones at random.
+    /// Determine the ratio/probability. The value should be between 0 and 1.
+    /// *Recommended Value:* **0.4**
     pub regio_ratio: f64,
+    /// During the ZKaff period, depending how deep into the zkaff period, a certain fraction of
+    /// specific challenges generated should be ZKaff. At the beginning, only a small fraction and
+    /// at the end a large fraction. A fraction above 1 means that 100% of challenges will be ZKaff
+    /// before the end of the period already.
+    /// *Recommended Value:* **0.2..1.2**
     pub zkaff_ratio_range: std::ops::Range<f64>,
 
     // miscellaneous game options
+    /// How many players should be hunters. This depends on how many players participate. Around
+    /// 40% is recommended and 35% if less experienced teams are present.
+    /// *Recommended Value:* **~40% of the player count (rounded down)**
     pub num_catchers: u64,
+    /// The ZVV zone in which the game starts.
+    /// *Recommended Value:* **Zone in which the game starts (probably 110)**
     pub start_zone: u64,
+    /// Whenever a team catches another, they should be invincible and invisible for some amount of
+    /// time, so that they don't immediately get caught again and have time to regroup and move
+    /// away.
+    /// *Recommended Value:* **15 minutes**
     pub grace_period_duration: chrono::TimeDelta,
 
     // Bounty system
+    /// When a team becomes gatherer, they should start off with a certain bounty. Or not, we have
+    /// found that it makes more sense if they don't have any starting bounty.
+    /// *Recommended Value:* **0**
     pub bounty_base_points: u64,
+    /// When a team starts as hunter, they are immediately disadvantaged and should therefore
+    /// receive some amount of points in compensation.
+    /// *Recommended Value:* **500**
     pub bounty_start_points: u64,
+    /// Whenever a team completes a challenge, their bounty should increase, so that they become a
+    /// more attractive target. That amount should be some fraction of the points they earn from
+    /// completing the challenge.
+    /// *Recommended Value:* **30**
     pub bounty_percentage: f64,
 
     // Times
+    /// The planned game start time. Probably in the morning, depends on the planning.
+    /// *Recommended Value:* **Whenever you start the game, we often do 09:00**
     pub start_time: chrono::NaiveTime,
+    /// The planned game end time. Probably in the evening, depends on the planning.
+    /// *Recommended Value:* **Whenever you want to end the game, we often do 17:00**
     pub end_time: chrono::NaiveTime,
+    /// Right at the start of the game, all challenges should be specific, so that the teams spread
+    /// out. Thus, for a certain amount of minutes after the start of the game, the specific period
+    /// takes place. It shouldn't be too short in case a team gets a challenge that is at the
+    /// starting location.
+    /// *Recommended Value:* **15**
     pub specific_minutes: u64,
+    /// For a certain amount of minutes before the ZKaff period starts, the perimeter period should
+    /// get teams out of the far flung corners of the map and towards the centre.
+    /// *Recommended Value:* **90**
     pub perimeter_minutes: u64,
+    /// For a certain amount of minutes before the end game period, the ZKaff period should slowly
+    /// transition the specific challenges to ZKaff challenges.
+    /// *Recommended Value:* **120**
     pub zkaff_minutes: u64,
+    /// For a certain amount of minutes right before the end of the game, more challenges should be
+    /// unspecific, so that most teams still have a challenge that is possible for them.
+    /// *Recommended Value:* **45**
     pub end_game_minutes: u64,
+    /// In order to prevent players (and especially organisers) from planning around the challenge
+    /// generation periods, their borders should be reandomised by a certain amount of minutes.
+    /// That means that any period may start that amount of minutes before or after the configured
+    /// time. That does not affect the specific period.
+    /// *Recommended Value:* **7**
     pub time_wiggle_minutes: u64,
 
     // Fallback Defaults
+    /// If all else fails during challenge generation, there should be some sort of a fallback
+    /// title for the challenge.
+    /// *Recommended Value:* **[Kreative Titel]**
     pub default_challenge_title: String,
+    /// If all else fails during challenge generation, there should be some sort of a fallback
+    /// description for the challenge.
+    /// *Recommended Value:* **Ihr händ Päch, die Challenge isch leider unlösbar. Ihr müend e
+    /// anderi uswähle.**
     pub default_challenge_description: String,
 
     // additional options
+    /// The teams should all have a unique colour. If no colour is specified for a team, they
+    /// should have assigned a default colour to them.
+    /// *Recommended Value:* **At least 8 different colours**
     pub team_colours: Vec<Colour>,
 }
 
@@ -481,8 +701,8 @@ impl Default for Config {
             num_challenges: 3,
             start_zone: 110,
             grace_period_duration: chrono::TimeDelta::minutes(15),
-            bounty_base_points: 100,
-            bounty_start_points: 250,
+            bounty_base_points: 0,
+            bounty_start_points: 500,
             bounty_percentage: 0.25,
             start_time: chrono::NaiveTime::from_hms_opt(9, 0, 0)
                 .expect("This is hardcoded and should never fail"),
@@ -547,6 +767,7 @@ impl Default for Config {
     }
 }
 
+/// Some bonsaidb thing to make the db work
 #[derive(Schema)]
 #[schema(name="engine", collections=[Session, PlayerEntry, ChallengeEntry, ZoneEntry, PastGame, PictureEntry, ChallengeSetEntry])]
 struct EngineSchema {}
@@ -592,6 +813,7 @@ impl PictureEntry {
     }
 }
 
+/// The representation of a player in the db
 #[derive(Debug, Collection, Serialize, Deserialize, Clone)]
 #[collection(name = "player")]
 pub struct PlayerEntry {
@@ -602,6 +824,7 @@ pub struct PlayerEntry {
 }
 
 impl PlayerEntry {
+    /// Converts the engine-internal `PlayerEntry` type into a sendable truinlag `Player` type
     pub fn to_sendable(&self, id: u64) -> truinlag::Player {
         truinlag::Player {
             name: self.name.clone(),
@@ -611,6 +834,7 @@ impl PlayerEntry {
     }
 }
 
+/// The representation of a zone in the db
 #[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "zone")]
 pub struct ZoneEntry {
@@ -624,6 +848,7 @@ pub struct ZoneEntry {
 }
 
 impl ZoneEntry {
+    /// Converts the engine-internal `ZoneEntry` type into a sendable truinlag `Zone` type
     pub fn to_sendable(&self, id: u64) -> Zone {
         Zone {
             zone: self.zone,
@@ -637,6 +862,7 @@ impl ZoneEntry {
         }
     }
 
+    /// Calculates the zone's zonic kaffness based on a config.
     pub fn zonic_kaffness(&self, config: &Config) -> u64 {
         let zonic_kaffness = ((6_f64 - self.num_conn_zones as f64)
             * config.points_per_connected_zone_less_than_6 as f64
@@ -662,6 +888,7 @@ impl ZoneEntry {
     }
 }
 
+/// The representation of a running game in the db
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InGame {
     name: String,
@@ -672,6 +899,7 @@ pub struct InGame {
 }
 
 impl InGame {
+    /// Converts the engine-internal `InGame` type into a sendable truinlag `Game` type
     pub fn to_sendable(&self) -> truinlag::Game {
         truinlag::Game {
             name: self.name.clone(),
@@ -681,6 +909,7 @@ impl InGame {
     }
 }
 
+/// The representation of a past game in the db
 #[derive(Debug, Clone, Serialize, Deserialize, Collection)]
 #[collection(name = "past game")]
 struct PastGame {
@@ -702,11 +931,14 @@ impl PastGame {
         }
     }
 
+    /// Create a past game from a running game with the assumption that it is ending as the
+    /// function is called.
     fn new_now(game: InGame, teams: Vec<TeamEntry>) -> Self {
         Self::new(game, teams, chrono::Local::now())
     }
 }
 
+/// The representation of a team that particitated in a past game in the db
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PastTeam {
     name: String,
@@ -723,6 +955,7 @@ struct PastTeam {
     periods: Vec<PastPeriod>,
 }
 
+/// The representation of a thing that a team that particitated in a past game once did in the db
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PastPeriod {
     pub context: PeriodContext,
@@ -744,7 +977,7 @@ impl From<TeamEntry> for PastTeam {
             colour: value.colour,
             points: value.points,
             bounty: value.bounty,
-            end_zone_id: value.zone_id,
+            end_zone_id: value.current_zone_id,
             start_location,
             end_location,
             end_challenges: value.challenges,
