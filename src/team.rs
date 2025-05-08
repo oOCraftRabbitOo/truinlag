@@ -121,6 +121,7 @@ impl TeamEntry {
             colour: self.colour,
             role: self.role,
             name: self.name.clone(),
+            picture_id: self.picture,
             id: index,
             bounty: self.bounty,
             points: self.points,

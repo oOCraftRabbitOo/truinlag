@@ -334,6 +334,7 @@ pub struct Zone {
 pub struct Team {
     pub role: TeamRole,
     pub name: String,
+    pub picture_id: Option<u64>,
     pub id: usize,
     pub colour: Colour,
     pub bounty: u64,
