@@ -2,7 +2,7 @@ use crate::{
     challenge::InOpenChallenge,
     runtime::{InternEngineCommand, InternEngineResponse, InternEngineResponsePackage},
     team::{PeriodContext, TeamEntry},
-    Config, EngineContext, InGame, PartialConfig, PastGame, SessionContext,
+    Config, EngineContext, InGame, PartialConfig, PastGame, PictureEntry, SessionContext,
 };
 use bonsaidb::core::schema::Collection;
 use geo::GeodesicDistance;
@@ -311,8 +311,10 @@ impl Session {
                         return Error(NotFound(format!("catcher team with id {}", catcher))).into()
                     }
                 };
+                let period_id;
                 match self.teams.get_mut(catcher) {
                     Some(catcher_team) => {
+                        period_id = catcher_team.periods.len();
                         runtime_requests
                             .push(catcher_team.have_caught(bounty, caught, catcher, context));
                     }
@@ -330,7 +332,7 @@ impl Session {
                 }
                 InternEngineResponsePackage {
                     response: EngineResponse {
-                        response_action: Success,
+                        response_action: Period(period_id),
                         broadcast_action: Some(broadcast),
                     }
                     .into(),
@@ -354,7 +356,7 @@ impl Session {
                 {
                     Ok((completed, request)) => InternEngineResponsePackage {
                         response: InternEngineResponse::DirectResponse(EngineResponse {
-                            response_action: Success,
+                            response_action: Period(completer_team.periods.len() - 1),
                             broadcast_action: Some(BroadcastAction::Completed {
                                 completer: completer_team.to_sendable(completer, context),
                                 completed: completed.to_sendable(),
@@ -595,6 +597,26 @@ impl Session {
         SendEvents(self.gather_events()).into()
     }
 
+    /// Corresponds to an `EngineAction` and updates a team's picture
+    fn upload_team_picture(
+        &mut self,
+        team_id: usize,
+        picture: Picture,
+        context: SessionContext,
+    ) -> InternEngineResponsePackage {
+        match self.teams.get_mut(team_id) {
+            Some(team) => {
+                let pfp = match PictureEntry::new_profile(picture.into()) {
+                    Ok(thing) => thing,
+                    Err(_err) => return Error(ImageProblem).into(),
+                };
+                team.picture = Some(context.engine_context.picture_db.add(pfp));
+                Success.into()
+            }
+            None => Error(NotFound(format!("team with id {team_id}"))).into(),
+        }
+    }
+
     /// The core method of the session that processes commands with sessions.
     ///
     /// The method takes a command to process, as well as a session id. This should be the id of
@@ -609,6 +631,9 @@ impl Session {
     ) -> InternEngineResponsePackage {
         let mut context = self.context(context, session_id);
         match command {
+            UploadTeamPicture { team_id, picture } => {
+                self.upload_team_picture(team_id, picture, context)
+            }
             GetEvents => self.get_events(),
             GenerateTeamChallenges(id) => self.generate_team_challenges(id, &context),
             AddChallengeToTeam { team, challenge } => self.add_challenge_to_team(team, challenge),
@@ -672,6 +697,10 @@ impl Session {
                 minutes: _,
             } => Error(SessionSupplied).into(),
             UploadChallengePictures(_) => Error(SessionSupplied).into(),
+            UploadPlayerPicture {
+                player_id: _,
+                picture: _,
+            } => Error(SessionSupplied).into(),
         }
     }
 }

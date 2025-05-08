@@ -131,6 +131,7 @@ pub struct EngineContext<'a> {
     challenge_db: &'a DBMirror<ChallengeEntry>,
     zone_db: &'a DBMirror<ZoneEntry>,
     past_game_db: &'a mut DBMirror<PastGame>,
+    picture_db: &'a mut DBMirror<PictureEntry>,
     timer_tracker: &'a mut TimerTracker,
 }
 
@@ -356,12 +357,18 @@ where
     }
 
     /// Adds a new entry to the collection.
-    fn add(&mut self, thing: T) {
+    fn add(&mut self, thing: T) -> u64 {
         let new_entry = Some((thing, DBStatus::Edited));
-        let mut iter = self.entries.iter_mut();
-        match iter.find(|e| e.is_none()) {
-            Some(entry) => *entry = new_entry,
-            None => self.entries.push(new_entry),
+        let iter = self.entries.iter_mut();
+        match iter.enumerate().find(|(_i, e)| e.is_none()) {
+            Some((index, entry)) => {
+                *entry = new_entry;
+                index as u64
+            }
+            None => {
+                self.entries.push(new_entry);
+                self.entries.len() as u64 - 1
+            }
         }
     }
 
@@ -775,7 +782,7 @@ struct EngineSchema {}
 #[derive(Debug, Collection, Serialize, Deserialize, Clone)]
 #[collection(name = "picture")]
 enum PictureEntry {
-    Profile { small: Picture, large: Picture },
+    Profile { thumb: Picture, full: Picture },
     ChallengePicture(Picture),
 }
 
@@ -797,14 +804,14 @@ impl PictureEntry {
                 image.width(),
             )
         };
-        let image = image.crop_imm(x, y, width, height);
 
-        let small = image.resize(128, 128, FilterType::CatmullRom);
-        let large = image.resize(512, 512, FilterType::CatmullRom);
+        let small = image
+            .crop_imm(x, y, width, height)
+            .resize(256, 256, FilterType::CatmullRom);
 
         Ok(Self::Profile {
-            small: small.try_into()?,
-            large: large.try_into()?,
+            thumb: small.try_into()?,
+            full: image.try_into()?,
         })
     }
 
@@ -817,6 +824,8 @@ impl PictureEntry {
 #[derive(Debug, Collection, Serialize, Deserialize, Clone)]
 #[collection(name = "player")]
 pub struct PlayerEntry {
+    #[serde(default)]
+    picture: Option<u64>,
     name: String,
     passphrase: String,
     discord_id: Option<u64>,

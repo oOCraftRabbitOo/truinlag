@@ -14,6 +14,8 @@ use truinlag::{commands::Error, *};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamEntry {
     pub name: String,
+    #[serde(default)]
+    pub picture: Option<u64>,
     pub players: Vec<u64>,
     pub discord_channel: Option<u64>,
     pub role: TeamRole,
@@ -31,6 +33,8 @@ pub struct TeamEntry {
 /// The representation of a thing that a team did in a running game in the db
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Period {
+    #[serde(default)]
+    pub pictures: Vec<u64>,
     pub context: PeriodContext,
     pub position_start_index: u64,
     pub position_end_index: u64,
@@ -96,6 +100,7 @@ impl TeamEntry {
     ) -> Self {
         TeamEntry {
             name,
+            picture: None,
             players,
             discord_channel,
             colour,
@@ -149,6 +154,7 @@ impl TeamEntry {
                         description: description.clone(),
                         points: *points,
                         time: p.end_time,
+                        picture_ids: p.pictures.clone(),
                         id: *id,
                     }),
                     _ => None,
@@ -691,10 +697,12 @@ impl TeamEntry {
         challenges
     }
 
-    /// Adds a new period with the provided context to the team with the end time being now
+    /// Adds a new period with the provided context and pictures to the team with the end time
+    /// being now.
     fn new_period(&mut self, context: PeriodContext) {
         self.periods.push(Period {
             context,
+            pictures: Vec::new(),
             position_start_index: min(
                 self.periods
                     .last()

@@ -24,10 +24,16 @@ impl TryFrom<DynamicImage> for Picture {
     }
 }
 
-impl TryFrom<Picture> for DynamicImage {
-    type Error = image::ImageError;
-    fn try_from(jpeg: Picture) -> Result<Self, image::ImageError> {
-        jpeg.try_into_img()
+// impl TryFrom<Picture> for DynamicImage {
+//     type Error = image::ImageError;
+//     fn try_from(jpeg: Picture) -> Result<Self, image::ImageError> {
+//         jpeg.try_into_img()
+//     }
+// }
+
+impl From<Picture> for DynamicImage {
+    fn from(jpeg: Picture) -> Self {
+        jpeg.try_into_img().unwrap()
     }
 }
 
@@ -362,8 +368,8 @@ pub struct CompletedChallenge {
     pub description: String,
     pub points: u64,
     pub time: chrono::NaiveTime,
+    pub picture_ids: Vec<u64>,
     pub id: u64,
-    // pub attached_images: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]

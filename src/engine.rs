@@ -109,9 +109,9 @@ pub struct Engine {
     zones: DBMirror<ZoneEntry>,
     players: DBMirror<PlayerEntry>,
     past_games: DBMirror<PastGame>,
+    pictures: DBMirror<PictureEntry>,
 
-    pictures: Vec<u64>,
-
+    // pictures: Vec<u64>,
     autosave_in_progress: Arc<AtomicBool>,
     autosave_done: Arc<Notify>,
     timer_tracker: TimerTracker,
@@ -144,12 +144,12 @@ impl Engine {
         .create_database::<EngineSchema>("engine", true)
         .unwrap();
 
-        let pictures = PictureEntry::all(&db)
-            .query() // this is dogshit but I don't know what else to do
-            .unwrap()
-            .iter()
-            .map(|doc| doc.header.id)
-            .collect();
+        // let pictures = PictureEntry::all(&db)
+        //     .query() // this is dogshit but I don't know what else to do
+        //     .unwrap()
+        //     .iter()
+        //     .map(|doc| doc.header.id)
+        //     .collect();
 
         let challenges = DBMirror::from_db(&db);
         let challenge_sets = DBMirror::from_db(&db);
@@ -157,6 +157,7 @@ impl Engine {
         let sessions = DBMirror::from_db(&db);
         let players = DBMirror::from_db(&db);
         let past_games = DBMirror::from_db(&db);
+        let pictures = DBMirror::from_db(&db);
 
         Engine {
             db,
@@ -213,6 +214,7 @@ impl Engine {
                                 challenge_db: &self.challenges,
                                 zone_db: &self.zones,
                                 past_game_db: &mut self.past_games,
+                                picture_db: &mut self.pictures,
                                 timer_tracker: &mut self.timer_tracker,
                             };
                             session.contents.vroom(command.action, id, context)
@@ -232,6 +234,7 @@ impl Engine {
                     challenge_db: &self.challenges,
                     zone_db: &self.zones,
                     past_game_db: &mut self.past_games,
+                    picture_db: &mut self.pictures,
                     timer_tracker: &mut self.timer_tracker,
                 };
                 match self.sessions.get_mut(session_id) {
@@ -487,6 +490,7 @@ impl Engine {
             Error(AlreadyExists).into()
         } else {
             self.players.add(PlayerEntry {
+                picture: None,
                 name,
                 discord_id,
                 passphrase,
@@ -654,8 +658,30 @@ impl Engine {
         InternEngineResponse::DelayedLoopback(picture_task).into()
     }
 
+    fn upload_player_picture(
+        &mut self,
+        player_id: u64,
+        picture: Picture,
+    ) -> InternEngineResponsePackage {
+        match self.players.get_mut(player_id) {
+            None => Error(NotFound(format!("player with id {player_id}"))).into(),
+            Some(player) => {
+                let pfp = match PictureEntry::new_profile(picture.into()) {
+                    Ok(thing) => thing,
+                    Err(_err) => return Error(ImageProblem).into(),
+                };
+                let pfp_id = self.pictures.add(pfp);
+                player.contents.picture = Some(pfp_id);
+                Success.into()
+            }
+        }
+    }
+
     fn handle_action(&mut self, action: EngineAction) -> InternEngineResponsePackage {
         match action {
+            UploadPlayerPicture { player_id, picture } => {
+                self.upload_player_picture(player_id, picture)
+            }
             UploadChallengePictures(pictures) => self.upload_pictures(pictures),
             GetAllZones => self.get_all_zones(),
             AddZone {
@@ -732,6 +758,10 @@ impl Engine {
                 new_name: _,
             } => Error(NoSessionSupplied).into(),
             GetEvents => Error(NoSessionSupplied).into(),
+            UploadTeamPicture {
+                team_id: _,
+                picture: _,
+            } => Error(NoSessionSupplied).into(),
         }
     }
 }

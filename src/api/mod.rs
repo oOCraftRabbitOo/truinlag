@@ -26,15 +26,17 @@ struct ResponseInfo {
 }
 
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
 enum DistributorMessage {
-    Command(ClientCommand),
+    Command(Box<ClientCommand>),
     ResponseInfo(ResponseInfo),
     Err(Error),
 }
 
+/// creates the various tasks needed for the truinlag connection
 async fn connectinator<R, W>(
+    // receives send requests from send connection
     mut send_req_recv: mpsc::Receiver<SendRequest>,
+    // sends incoming broadcasts to recv connection
     broadcast_send: mpsc::Sender<BroadcastAction>,
     socket_read: R,
     socket_write: W,
@@ -43,14 +45,33 @@ where
     R: tokio::io::AsyncRead + std::marker::Unpin + std::marker::Send + 'static,
     W: tokio::io::AsyncWrite + std::marker::Unpin + std::marker::Send + 'static,
 {
+    // All truinlag messages arrive in a single place, but some messages are broadcasts and others
+    // are responses. In order for the truinlag receiver task to know which messages are responses
+    // and where to send them, it needs to simultaneously receive messages about commands that have
+    // been sent to the engine (in order for it to know where the responses have to go), the actual
+    // truinlag messages as well as error messages / shutdown requests. The `DistributorMessage`
+    // enum is one of those things and this channel here is created to send them.
     let (command_send, mut dist_msg_recv) = mpsc::channel::<DistributorMessage>(1024);
     let response_info_send = command_send.clone();
     let res_inf_send_exp = "receiver should only be dropped once distributor shuts down, which also causes send_manager to shut down.";
 
+    // The `send_manager` tasks receives send requests from the `SendConnection`s. It then first
+    // sends information about the expected response on the `DistributorMessage` channel and then
+    // sends the requested command to truinlag.
     let send_manager = tokio::spawn(async move {
+        // Each command needs a unique id, which is then also contained in truinlag's response.
+        // This allows returning responses to the correct sender. This counter is simply
+        // incremented in order to obtain unique ids.
         let mut id = 0;
+        // The socket is wrapped in a `FramedWrite`, which handles packaging serialised commands
+        // for sending them through a socket.
         let mut transport = FramedWrite::new(socket_write, LengthDelimitedCodec::new());
+        // Awaiting send requests. Either waits or returns `Some` until all `SendConnection`s are
+        // dropped. When that happens, the task exits silently, so that broadcasts can still be
+        // received.
         while let Some(send_req) = send_req_recv.recv().await {
+            // send id and response channel to distributor task, such that response can be routed
+            // properly
             response_info_send
                 .send(DistributorMessage::ResponseInfo(ResponseInfo {
                     id,
@@ -64,7 +85,10 @@ where
             };
             let serialized =
                 bincode::serialize(&package).expect("EngineCommand should always be serializable");
+            // send serialised message to truinlag
             if let Err(_err) = transport.send(Bytes::from(serialized)).await {
+                // if an error is returned, the connection is assumed to be dead and everything is
+                // aborted.
                 response_info_send
                     .send(DistributorMessage::Err(Error::Disconnect))
                     .await
@@ -76,6 +100,8 @@ where
         Ok(())
     });
 
+    // The `receive_manager` receives messages from truinlag, then deserialises and forwards them
+    // to the `distributor`.
     let receive_manager = tokio::spawn(async move {
         let mut transport = FramedRead::new(socket_read, LengthDelimitedCodec::new());
         while let Some(message) = transport.next().await {
@@ -85,7 +111,7 @@ where
                         Error::InvalidSignal(format!("deserialisation error: {}", err))
                     })?;
                     command_send
-                        .send(DistributorMessage::Command(command))
+                        .send(DistributorMessage::Command(Box::new(command)))
                         .await
                         .map_err(|_| Error::Disconnect)?;
                 }
@@ -101,7 +127,12 @@ where
         Ok(())
     });
 
+    // The distributor receives broadcasts, responses and info about upcoming responses and
+    // distributes them accordingly.
     let distributor = tokio::spawn(async move {
+        // For each response, either the `ResponseInfo` or the `ResponsePackage` will arrive first.
+        // If something arrives, the `distributor` checks if its counterpart is already in the
+        // following caches, and if not, the newly arrived thing is cached.
         let mut info_cache = std::vec::Vec::<ResponseInfo>::new();
         let mut msg_cache = std::vec::Vec::<ResponsePackage>::new();
         while let Some(message) = dist_msg_recv.recv().await {
@@ -116,7 +147,7 @@ where
                         info_cache.push(info);
                     };
                 }
-                DistributorMessage::Command(command) => match command {
+                DistributorMessage::Command(command) => match *command {
                     ClientCommand::Broadcast(msg) => {
                         broadcast_send.send(msg).await.expect(
                             "Receiver handle can only be dropped if JoinHandle is dropped too",
@@ -142,16 +173,19 @@ where
         }
     });
 
+    // if either the `receive_manager` or the `distributor` exit, all tasks should exit.
     tokio::select! {
         _ = distributor => {},
         _ = receive_manager => {},
     };
 
+    // If the `send_manager` exists before the others, it shouldn't halt the others.
     send_manager.abort();
 
     Ok(())
 }
 
+/// Connects to truinlag and returns a `SendConnection` and an `InactiveRecvConnection`.
 pub async fn connect(address: Option<&str>) -> Result<(SendConnection, InactiveRecvConnection)> {
     let (socket_read, socket_write) = UnixStream::connect(address.unwrap_or("/tmp/truinsocket"))
         .await
@@ -160,6 +194,7 @@ pub async fn connect(address: Option<&str>) -> Result<(SendConnection, InactiveR
     insert_connection(socket_read, socket_write).await
 }
 
+/// Allows converting some existing connection into a truinlag connection.
 pub async fn insert_connection<R, W>(
     read: R,
     write: W,
@@ -186,12 +221,14 @@ where
     ))
 }
 
+/// Allows sending commands to truinlag and receiving responses on that call.
 #[derive(Clone)]
 pub struct SendConnection {
     send_req_send: mpsc::Sender<SendRequest>,
 }
 
 impl SendConnection {
+    /// Sends a command to truinlag and receives the corresponding response.
     pub async fn send(&mut self, command: EngineCommand) -> Result<ResponseAction> {
         let (resp_send, resp_recv) = oneshot::channel();
         let package = SendRequest {
