@@ -679,8 +679,38 @@ impl Engine {
         }
     }
 
+    fn get_thumbnails(&self, ids: Vec<u64>) -> InternEngineResponsePackage {
+        Pictures(
+            ids.iter()
+                .filter_map(|id| {
+                    self.pictures.get(*id).and_then(|p| match p.contents {
+                        PictureEntry::Profile { thumb, full: _ } => Some((*id, thumb.clone())),
+                        PictureEntry::ChallengePicture(_) => None,
+                    })
+                })
+                .collect(),
+        )
+        .into()
+    }
+
+    fn get_pictures(&self, ids: Vec<u64>) -> InternEngineResponsePackage {
+        Pictures(
+            ids.iter()
+                .filter_map(|id| {
+                    self.pictures.get(*id).map(|p| match p.contents {
+                        PictureEntry::ChallengePicture(pic) => (*id, pic.clone()),
+                        PictureEntry::Profile { thumb: _, full } => (*id, full.clone()),
+                    })
+                })
+                .collect(),
+        )
+        .into()
+    }
+
     fn handle_action(&mut self, action: EngineAction) -> InternEngineResponsePackage {
         match action {
+            GetPictures(ids) => self.get_pictures(ids),
+            GetThumbnails(ids) => self.get_thumbnails(ids),
             UploadPlayerPicture { player_id, picture } => {
                 self.upload_player_picture(player_id, picture)
             }

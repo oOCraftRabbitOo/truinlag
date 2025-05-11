@@ -138,6 +138,8 @@ pub enum EngineAction {
         player_id: u64,
         picture: Picture,
     },
+    GetThumbnails(Vec<u64>),
+    GetPictures(Vec<u64>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -161,6 +163,7 @@ pub enum ResponseAction {
     SendEvents(Vec<Event>),
     UploadedPictures(Vec<u64>),
     Period(usize),
+    Pictures(Vec<(u64, Picture)>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

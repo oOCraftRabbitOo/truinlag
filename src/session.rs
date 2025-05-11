@@ -734,6 +734,8 @@ impl Session {
                 player_id: _,
                 picture: _,
             } => Error(SessionSupplied).into(),
+            GetThumbnails(_) => Error(SessionSupplied).into(),
+            GetPictures(_) => Error(SessionSupplied).into(),
         }
     }
 }
