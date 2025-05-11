@@ -638,25 +638,27 @@ impl Engine {
         .into()
     }
 
-    fn upload_pictures(&mut self, pictures: Vec<Picture>) -> InternEngineResponsePackage {
-        let db = self.db.to_async();
-        let picture_task = tokio::spawn(async move {
-            let mut pictures_added = Vec::new();
-            for pic in pictures {
-                match PictureEntry::ChallengePicture(pic)
-                    .push_into_async(&db)
-                    .await
-                {
-                    Ok(doc) => pictures_added.push(doc.header.id),
-                    Err(err) => {
-                        eprintln!("Engine: error adding picture to db: {err}");
-                    }
-                }
-            }
-            InternEngineCommand::UploadedImages(pictures_added)
-        });
-        InternEngineResponse::DelayedLoopback(picture_task).into()
-    }
+    // this is code for if pictures are not copied into memory. It should be used in some capacity
+    // again in the future, but for now it's out of commission.
+    //     fn upload_pictures(&mut self, pictures: Vec<Picture>) -> InternEngineResponsePackage {
+    //         let db = self.db.to_async();
+    //         let picture_task = tokio::spawn(async move {
+    //             let mut pictures_added = Vec::new();
+    //             for pic in pictures {
+    //                 match PictureEntry::ChallengePicture(pic)
+    //                     .push_into_async(&db)
+    //                     .await
+    //                 {
+    //                     Ok(doc) => pictures_added.push(doc.header.id),
+    //                     Err(err) => {
+    //                         eprintln!("Engine: error adding picture to db: {err}");
+    //                     }
+    //                 }
+    //             }
+    //             InternEngineCommand::UploadedImages(pictures_added)
+    //         });
+    //         InternEngineResponse::DelayedLoopback(picture_task).into()
+    //     }
 
     fn upload_player_picture(
         &mut self,
@@ -682,7 +684,6 @@ impl Engine {
             UploadPlayerPicture { player_id, picture } => {
                 self.upload_player_picture(player_id, picture)
             }
-            UploadChallengePictures(pictures) => self.upload_pictures(pictures),
             GetAllZones => self.get_all_zones(),
             AddZone {
                 zone,
@@ -761,6 +762,11 @@ impl Engine {
             UploadTeamPicture {
                 team_id: _,
                 picture: _,
+            } => Error(NoSessionSupplied).into(),
+            UploadPeriodPictures {
+                pictures: _,
+                team: _,
+                period: _,
             } => Error(NoSessionSupplied).into(),
         }
     }

@@ -815,8 +815,8 @@ impl PictureEntry {
         })
     }
 
-    fn new_challenge_picture(image: image::DynamicImage) -> Result<Self, image::ImageError> {
-        Ok(Self::ChallengePicture(image.try_into()?))
+    fn new_challenge_picture(picture: Picture) -> Self {
+        Self::ChallengePicture(picture)
     }
 }
 

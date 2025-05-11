@@ -617,6 +617,35 @@ impl Session {
         }
     }
 
+    fn upload_period_pictures(
+        &mut self,
+        team_id: usize,
+        period_id: usize,
+        pictures: Vec<Picture>,
+        context: SessionContext,
+    ) -> InternEngineResponsePackage {
+        match self.teams.get_mut(team_id) {
+            None => Error(NotFound(format!("team with id {team_id}"))).into(),
+            Some(team) => match team.periods.get_mut(period_id) {
+                None => Error(NotFound(format!(
+                    "period with index {} in team {}",
+                    period_id, team.name
+                )))
+                .into(),
+                Some(period) => {
+                    let ids = pictures.into_iter().map(|picture| {
+                        context
+                            .engine_context
+                            .picture_db
+                            .add(PictureEntry::new_challenge_picture(picture))
+                    });
+                    period.pictures.extend(ids);
+                    Success.into()
+                }
+            },
+        }
+    }
+
     /// The core method of the session that processes commands with sessions.
     ///
     /// The method takes a command to process, as well as a session id. This should be the id of
@@ -631,6 +660,11 @@ impl Session {
     ) -> InternEngineResponsePackage {
         let mut context = self.context(context, session_id);
         match command {
+            UploadPeriodPictures {
+                pictures,
+                team,
+                period,
+            } => self.upload_period_pictures(team, period, pictures, context),
             UploadTeamPicture { team_id, picture } => {
                 self.upload_team_picture(team_id, picture, context)
             }
@@ -696,7 +730,6 @@ impl Session {
                 to_zone: _,
                 minutes: _,
             } => Error(SessionSupplied).into(),
-            UploadChallengePictures(_) => Error(SessionSupplied).into(),
             UploadPlayerPicture {
                 player_id: _,
                 picture: _,

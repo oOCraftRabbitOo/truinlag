@@ -125,7 +125,11 @@ pub enum EngineAction {
         minutes: u64,
     },
     GetEvents,
-    UploadChallengePictures(Vec<Picture>),
+    UploadPeriodPictures {
+        pictures: Vec<Picture>,
+        team: usize,
+        period: usize,
+    },
     UploadTeamPicture {
         team_id: usize,
         picture: Picture,
