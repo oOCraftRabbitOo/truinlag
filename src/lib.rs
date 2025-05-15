@@ -45,6 +45,13 @@ impl From<RawPicture> for DynamicImage {
 }
 
 impl RawPicture {
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, image::ImageError> {
+        Self::from_img(image::load_from_memory_with_format(
+            &bytes,
+            ImageFormat::Jpeg,
+        )?)
+    }
+
     pub fn from_img(img: DynamicImage) -> Result<Self, image::ImageError> {
         let mut buff = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buff, ImageFormat::Jpeg)?;
@@ -52,6 +59,7 @@ impl RawPicture {
             data: buff.into_inner(),
         })
     }
+
     pub fn try_into_img(self) -> Result<DynamicImage, image::ImageError> {
         image::load_from_memory_with_format(&self.data, ImageFormat::Jpeg)
     }
