@@ -198,7 +198,9 @@ impl Engine {
         // The engine can receive many kinds of commands, some from the runtime (and itself, with a
         // delay for example) and some from actual clients. All cases are categorised within the
         // `InternEngineCommand` enum.
-        match command {
+        let start_time = std::time::Instant::now();
+        let cmdcopy = command.clone();
+        let response = match command {
             // These are cases from actual external clients. For readability, they are passed to
             // helper functions.
             InternEngineCommand::Command(command) => {
@@ -364,7 +366,16 @@ impl Engine {
                     .into()
                 }
             }
+        };
+        let duration = start_time.elapsed();
+        if duration.as_millis() > 10 {
+            println!(
+                "Command {:?} took {}ms to complete.",
+                cmdcopy,
+                duration.as_millis()
+            );
         }
+        response
     }
 
     fn get_all_zones(&self) -> InternEngineResponsePackage {
