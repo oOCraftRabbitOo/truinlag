@@ -8,7 +8,6 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
-    Ron(ron::Error),
     Reqwest(reqwest::Error),
     Bincode(bincode::Error),
     BroadcastRecv(broadcast::RecvError),
@@ -24,7 +23,6 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Io(err) => write!(f, "I/O error: {}", err),
-            Error::Ron(err) => write!(f, "Deserialisation error: {}", err),
             Error::Reqwest(err) => write!(f, "http reqwest error: {}", err),
             Error::MpscSend(err) => write!(f, "Couldn't send message to engine: {}", err),
             Error::ClientCommandSend(err) => write!(f, "mpsc send error: {}", err),
@@ -49,18 +47,6 @@ impl std::fmt::Display for Error {
 impl From<io::Error> for Error {
     fn from(error: io::Error) -> Self {
         Error::Io(error)
-    }
-}
-
-impl From<ron::Error> for Error {
-    fn from(error: ron::Error) -> Self {
-        Error::Ron(error)
-    }
-}
-
-impl From<ron::error::SpannedError> for Error {
-    fn from(error: ron::error::SpannedError) -> Self {
-        error.code.into()
     }
 }
 
