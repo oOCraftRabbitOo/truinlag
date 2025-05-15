@@ -55,6 +55,10 @@ impl RawPicture {
     pub fn try_into_img(self) -> Result<DynamicImage, image::ImageError> {
         image::load_from_memory_with_format(&self.data, ImageFormat::Jpeg)
     }
+
+    pub fn get_bytes(&self) -> Vec<u8> {
+        self.data.clone()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
