@@ -601,7 +601,7 @@ impl Session {
     fn upload_team_picture(
         &mut self,
         team_id: usize,
-        picture: Picture,
+        picture: RawPicture,
         context: SessionContext,
     ) -> InternEngineResponsePackage {
         match self.teams.get_mut(team_id) {
@@ -621,7 +621,7 @@ impl Session {
         &mut self,
         team_id: usize,
         period_id: usize,
-        pictures: Vec<Picture>,
+        pictures: Vec<RawPicture>,
         context: SessionContext,
     ) -> InternEngineResponsePackage {
         match self.teams.get_mut(team_id) {

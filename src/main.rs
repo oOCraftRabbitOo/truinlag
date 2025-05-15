@@ -782,8 +782,8 @@ struct EngineSchema {}
 #[derive(Debug, Collection, Serialize, Deserialize, Clone)]
 #[collection(name = "picture")]
 enum PictureEntry {
-    Profile { thumb: Picture, full: Picture },
-    ChallengePicture(Picture),
+    Profile { thumb: RawPicture, full: RawPicture },
+    ChallengePicture(RawPicture),
 }
 
 #[allow(dead_code)]
@@ -815,7 +815,7 @@ impl PictureEntry {
         })
     }
 
-    fn new_challenge_picture(picture: Picture) -> Self {
+    fn new_challenge_picture(picture: RawPicture) -> Self {
         Self::ChallengePicture(picture)
     }
 }

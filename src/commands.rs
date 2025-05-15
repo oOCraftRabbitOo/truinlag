@@ -126,17 +126,17 @@ pub enum EngineAction {
     },
     GetEvents,
     UploadPeriodPictures {
-        pictures: Vec<Picture>,
+        pictures: Vec<RawPicture>,
         team: usize,
         period: usize,
     },
     UploadTeamPicture {
         team_id: usize,
-        picture: Picture,
+        picture: RawPicture,
     },
     UploadPlayerPicture {
         player_id: u64,
-        picture: Picture,
+        picture: RawPicture,
     },
     GetThumbnails(Vec<u64>),
     GetPictures(Vec<u64>),
@@ -163,7 +163,7 @@ pub enum ResponseAction {
     SendEvents(Vec<Event>),
     UploadedPictures(Vec<u64>),
     Period(usize),
-    Pictures(Vec<(u64, Picture)>),
+    Pictures(Vec<Picture>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

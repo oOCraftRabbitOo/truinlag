@@ -663,7 +663,7 @@ impl Engine {
     fn upload_player_picture(
         &mut self,
         player_id: u64,
-        picture: Picture,
+        picture: RawPicture,
     ) -> InternEngineResponsePackage {
         match self.players.get_mut(player_id) {
             None => Error(NotFound(format!("player with id {player_id}"))).into(),
@@ -684,7 +684,11 @@ impl Engine {
             ids.iter()
                 .filter_map(|id| {
                     self.pictures.get(*id).and_then(|p| match p.contents {
-                        PictureEntry::Profile { thumb, full: _ } => Some((*id, thumb.clone())),
+                        PictureEntry::Profile { thumb, full: _ } => Some(Picture {
+                            data: thumb.clone(),
+                            is_thumbnail: true,
+                            id: *id,
+                        }),
                         PictureEntry::ChallengePicture(_) => None,
                     })
                 })
@@ -698,8 +702,16 @@ impl Engine {
             ids.iter()
                 .filter_map(|id| {
                     self.pictures.get(*id).map(|p| match p.contents {
-                        PictureEntry::ChallengePicture(pic) => (*id, pic.clone()),
-                        PictureEntry::Profile { thumb: _, full } => (*id, full.clone()),
+                        PictureEntry::ChallengePicture(pic) => Picture {
+                            data: pic.clone(),
+                            is_thumbnail: false,
+                            id: *id,
+                        },
+                        PictureEntry::Profile { thumb: _, full } => Picture {
+                            data: full.clone(),
+                            is_thumbnail: false,
+                            id: *id,
+                        },
                     })
                 })
                 .collect(),
