@@ -22,6 +22,7 @@ pub struct TeamEntry {
     pub colour: Colour,
     pub points: u64,
     pub bounty: u64,
+    #[serde(default)]
     pub current_zone_id: u64,
     pub locations: Vec<(f64, f64, NaiveTime)>,
     pub challenges: Vec<InOpenChallenge>,
