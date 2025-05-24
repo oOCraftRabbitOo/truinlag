@@ -1,4 +1,5 @@
 use super::*;
+use chrono::NaiveTime;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -140,6 +141,7 @@ pub enum EngineAction {
     },
     GetThumbnails(Vec<u64>),
     GetPictures(Vec<u64>),
+    GetLocations,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -164,6 +166,7 @@ pub enum ResponseAction {
     UploadedPictures(Vec<u64>),
     Period(usize),
     Pictures(Vec<Picture>),
+    SendLocations(Vec<(Team, Vec<(f64, f64, NaiveTime)>)>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

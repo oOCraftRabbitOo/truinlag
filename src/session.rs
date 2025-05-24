@@ -646,6 +646,17 @@ impl Session {
         }
     }
 
+    fn send_locations(&self, context: SessionContext) -> InternEngineResponsePackage {
+        SendLocations(
+            self.teams
+                .iter()
+                .enumerate()
+                .map(|(index, team)| (team.to_sendable(index, &context), team.locations.clone()))
+                .collect(),
+        )
+        .into()
+    }
+
     /// The core method of the session that processes commands with sessions.
     ///
     /// The method takes a command to process, as well as a session id. This should be the id of
@@ -660,6 +671,7 @@ impl Session {
     ) -> InternEngineResponsePackage {
         let mut context = self.context(context, session_id);
         match command {
+            GetLocations => self.send_locations(context),
             UploadPeriodPictures {
                 pictures,
                 team,

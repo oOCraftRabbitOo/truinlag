@@ -821,6 +821,7 @@ impl Engine {
                 team: _,
                 period: _,
             } => Error(NoSessionSupplied).into(),
+            GetLocations => Error(NoSessionSupplied).into(),
         }
     }
 }
