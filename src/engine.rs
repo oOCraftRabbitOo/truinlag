@@ -311,6 +311,10 @@ impl Engine {
                     self.zones.clear_pending_deletions();
                     let zone_deletions = self.zones.extract_deletions();
 
+                    let picture_changes = self.pictures.extract_changes();
+                    self.pictures.clear_pending_deletions();
+                    let picture_deletions = self.pictures.extract_deletions();
+
                     self.changes_since_save = false;
 
                     let autosave_in_progress = self.autosave_in_progress.clone();
@@ -359,6 +363,15 @@ impl Engine {
                                     .unwrap();
                                 vec_delete_in_transaction::<ZoneEntry>(
                                     zone_deletions,
+                                    &mut transaction,
+                                    &db,
+                                )
+                                .await
+                                .unwrap();
+                                vec_overwrite_in_transaction(picture_changes, &mut transaction)
+                                    .unwrap();
+                                vec_delete_in_transaction::<PictureEntry>(
+                                    picture_deletions,
                                     &mut transaction,
                                     &db,
                                 )
