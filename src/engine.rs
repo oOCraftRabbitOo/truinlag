@@ -4,6 +4,7 @@ use crate::{
         InternEngineCommand, InternEngineResponse, InternEngineResponsePackage, RuntimeRequest,
     },
     session::Session,
+    team::{Period, TeamEntry},
     ClonedDBEntry, DBMirror, EngineContext, EngineSchema, PastGame, PictureEntry, PlayerEntry,
     TimerTracker, ZoneEntry,
 };
@@ -14,6 +15,7 @@ use bonsaidb::{
         AsyncDatabase, Database, Storage,
     },
 };
+use chrono::NaiveTime;
 use std::{
     collections::HashMap,
     path::Path,
@@ -154,10 +156,29 @@ impl Engine {
         let challenges = DBMirror::from_db(&db);
         let challenge_sets = DBMirror::from_db(&db);
         let zones = DBMirror::from_db(&db);
-        let sessions = DBMirror::from_db(&db);
+        let sessions: DBMirror<Session> = DBMirror::from_db(&db);
         let players = DBMirror::from_db(&db);
         let past_games = DBMirror::from_db(&db);
         let pictures = DBMirror::from_db(&db);
+
+        let sessionista = sessions.get_all();
+        for session in sessionista {
+            println!("Size of session {}:", session.contents.name);
+            let mut teams_size = 0;
+            for team in &session.contents.teams {
+                let mut team_size = 0;
+                println!("Size of team {}:", team.name);
+                let locations_size = team.locations.capacity() * size_of::<(f64, f64, NaiveTime)>();
+                println!("Locations: {}", locations_size);
+                let periods_size = team.periods.capacity() * size_of::<Period>();
+                println!("Periods: {}", locations_size);
+                team_size += locations_size + periods_size;
+                team_size += size_of::<TeamEntry>();
+                println!("Total: {}\n", team_size);
+                teams_size += team_size;
+            }
+            println!("\nTotal: {}", teams_size + size_of::<Session>());
+        }
 
         Engine {
             db,
