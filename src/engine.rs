@@ -171,7 +171,7 @@ impl Engine {
                 let locations_size = team.locations.capacity() * size_of::<(f64, f64, NaiveTime)>();
                 println!("Locations: {}", locations_size);
                 let periods_size = team.periods.capacity() * size_of::<Period>();
-                println!("Periods: {}", locations_size);
+                println!("Periods: {}", periods_size);
                 team_size += locations_size + periods_size;
                 team_size += size_of::<TeamEntry>();
                 println!("Total: {}\n", team_size);
