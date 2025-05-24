@@ -1,5 +1,5 @@
 use crate::{
-    challenge::{ChallengeEntry, ChallengeSetEntry},
+    challenge::{ChallengeEntry, ChallengeSetEntry, InOpenChallenge},
     runtime::{
         InternEngineCommand, InternEngineResponse, InternEngineResponsePackage, RuntimeRequest,
     },
@@ -174,8 +174,20 @@ impl Engine {
                 println!("Periods: {}", periods_size);
                 team_size += locations_size + periods_size;
                 team_size += size_of::<TeamEntry>();
-                println!("Total: {}\n", team_size);
+                println!("Total: {}", team_size);
                 teams_size += team_size;
+                let mut size = size_of_val(team); // Stack part
+
+                size += team.name.capacity(); // String heap
+
+                size += team.players.capacity() * std::mem::size_of::<u64>();
+
+                size += team.locations.capacity() * std::mem::size_of::<(f64, f64, NaiveTime)>();
+
+                size += team.challenges.capacity() * std::mem::size_of::<InOpenChallenge>();
+
+                size += team.periods.capacity() * std::mem::size_of::<Period>();
+                println!("Other total: {}\n", size);
             }
             println!("\nTotal: {}", teams_size + size_of::<Session>());
         }
