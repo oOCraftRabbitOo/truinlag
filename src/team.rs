@@ -702,13 +702,11 @@ impl TeamEntry {
         self.periods.push(Period {
             context,
             pictures: Vec::new(),
-            position_start_index: min(
-                self.periods
-                    .last()
-                    .map(|p| p.position_end_index + 1)
-                    .unwrap_or(0),
-                self.locations.len() as u64 - 1,
-            ),
+            position_start_index: self
+                .periods
+                .last()
+                .map(|p| p.position_end_index + 1)
+                .unwrap_or(0),
             position_end_index: self.locations.len() as u64 - 1,
             end_time: chrono::Local::now().time(),
         });
