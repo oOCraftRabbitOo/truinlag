@@ -1,6 +1,7 @@
 use crate::{
     engine,
     error::{self, Result},
+    PictureEntry,
 };
 use async_broadcast as broadcast;
 use serde::{Deserialize, Serialize};
@@ -62,7 +63,19 @@ pub enum InternEngineCommand {
     Command(Box<EngineCommand>),
     AutoSave,
     UploadedImages(Vec<u64>),
-    TeamLeftGracePeriod { session_id: u64, team_id: usize },
+    TeamLeftGracePeriod {
+        session_id: u64,
+        team_id: usize,
+    },
+    MadeTeamProfile {
+        session_id: u64,
+        team_id: usize,
+        pfp: Result<PictureEntry, Error>,
+    },
+    MadePlayerProfile {
+        player_id: u64,
+        pfp: Result<PictureEntry, Error>,
+    },
 }
 
 #[derive(Clone, Debug)]

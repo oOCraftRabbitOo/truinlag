@@ -223,7 +223,7 @@ pub enum Error {
     TeamsTooFar,       // Two relevant teams are too far away from each other
     BadData(String),
     TextError(String), // Some other kind of error with a custom text
-    ImageProblem,      // An Image-related error
+    PictureProblem,    // An Image-related error
 }
 
 impl std::fmt::Display for Error {
@@ -244,7 +244,7 @@ impl std::fmt::Display for Error {
             Self::TeamsTooFar => write!(f, "the teams are too far away from each other"),
             Self::BadData(text) => write!(f, "bad data: {}", text),
             Self::TextError(text) => write!(f, "{}", text),
-            Self::ImageProblem => write!(f, "there was a problem processing an image")
+            Self::PictureProblem => write!(f, "there was a problem processing an image")
         }
     }
 }

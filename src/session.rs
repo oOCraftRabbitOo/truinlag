@@ -606,13 +606,22 @@ impl Session {
         context: SessionContext,
     ) -> InternEngineResponsePackage {
         match self.teams.get_mut(team_id) {
-            Some(team) => {
-                let pfp = match PictureEntry::new_profile(picture.into()) {
-                    Ok(thing) => thing,
-                    Err(_err) => return Error(ImageProblem).into(),
-                };
-                team.picture = Some(context.engine_context.picture_db.add(pfp));
-                Success.into()
+            Some(_team) => {
+                let session_id = context.session_id;
+                InternEngineResponse::DelayedLoopback(tokio::spawn(async move {
+                    let pfp =
+                        tokio::task::block_in_place(|| PictureEntry::new_profile(picture.into()))
+                            .map_err(|err| {
+                                eprintln!("Engine: couldn't convert picture: {}", err);
+                                PictureProblem
+                            });
+                    InternEngineCommand::MadeTeamProfile {
+                        session_id,
+                        team_id,
+                        pfp,
+                    }
+                }))
+                .into()
             }
             None => Error(NotFound(format!("team with id {team_id}"))).into(),
         }

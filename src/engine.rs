@@ -232,7 +232,6 @@ impl Engine {
         // delay for example) and some from actual clients. All cases are categorised within the
         // `InternEngineCommand` enum.
         let start_time = std::time::Instant::now();
-        let cmdcopy = command.clone();
         let response = match command {
             // These are cases from actual external clients. For readability, they are passed to
             // helper functions.
@@ -283,6 +282,37 @@ impl Engine {
             InternEngineCommand::UploadedImages(pictures_added) => {
                 UploadedPictures(pictures_added).into()
             }
+
+            InternEngineCommand::MadeTeamProfile {
+                session_id,
+                team_id,
+                pfp,
+            } => match pfp {
+                Ok(pfp) => match self.sessions.get_mut(session_id) {
+                    Some(session) => match session.contents.teams.get_mut(team_id) {
+                        Some(team) => {
+                            team.picture = Some(self.pictures.add(pfp));
+                            Success
+                        }
+                        None => Error(NotFound(format!("team with id {}", team_id))),
+                    },
+                    None => Error(NotFound(format!("session with id {}", session_id))),
+                },
+                Err(err) => Error(err),
+            }
+            .into(),
+
+            InternEngineCommand::MadePlayerProfile { player_id, pfp } => match pfp {
+                Ok(pfp) => match self.players.get_mut(player_id) {
+                    Some(player) => {
+                        player.contents.picture = Some(self.pictures.add(pfp));
+                        Success
+                    }
+                    None => Error(NotFound(format!("player with id {player_id}"))),
+                },
+                Err(err) => Error(err),
+            }
+            .into(),
 
             InternEngineCommand::AutoSave => {
                 if self.changes_since_save {
@@ -415,11 +445,7 @@ impl Engine {
         };
         let duration = start_time.elapsed();
         if duration.as_millis() > 10 {
-            println!(
-                "Command {:?} took {}ms to complete.",
-                cmdcopy,
-                duration.as_millis()
-            );
+            println!("A command took {}ms to complete.", duration.as_millis());
         }
         response
     }
@@ -723,16 +749,16 @@ impl Engine {
         picture: RawPicture,
     ) -> InternEngineResponsePackage {
         match self.players.get_mut(player_id) {
+            Some(_player) => InternEngineResponse::DelayedLoopback(tokio::spawn(async move {
+                let pfp = tokio::task::block_in_place(|| PictureEntry::new_profile(picture.into()))
+                    .map_err(|err| {
+                        eprintln!("Engine: couldn't convert picture: {}", err);
+                        PictureProblem
+                    });
+                InternEngineCommand::MadePlayerProfile { player_id, pfp }
+            }))
+            .into(),
             None => Error(NotFound(format!("player with id {player_id}"))).into(),
-            Some(player) => {
-                let pfp = match PictureEntry::new_profile(picture.into()) {
-                    Ok(thing) => thing,
-                    Err(_err) => return Error(ImageProblem).into(),
-                };
-                let pfp_id = self.pictures.add(pfp);
-                player.contents.picture = Some(pfp_id);
-                Success.into()
-            }
         }
     }
 
