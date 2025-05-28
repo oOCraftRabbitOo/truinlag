@@ -464,10 +464,10 @@ impl Session {
                 // Set up alarm
                 let (request, timer) = context.engine_context.timer_tracker.alarm(
                     chrono::Local::now().with_time(config.end_time).unwrap(),
-                    InternEngineCommand::Command(EngineCommand {
+                    InternEngineCommand::Command(Box::new(EngineCommand {
                         session: Some(context.session_id),
                         action: Stop,
-                    }),
+                    })),
                 );
 
                 // Set up game
@@ -557,7 +557,6 @@ impl Session {
                             description,
                             zone: _,
                             points,
-                            photo: _,
                             id: _,
                         } => Some(Event::Complete {
                             challenge: Challenge {
@@ -566,6 +565,7 @@ impl Session {
                                 points: *points,
                             },
                             completer_id: team_id,
+                            picture_ids: period.pictures.clone(),
                             time: period.end_time,
                         }),
                         PeriodContext::Catcher {
@@ -575,6 +575,7 @@ impl Session {
                             catcher_id: team_id,
                             caught_id: *caught_team,
                             bounty: *bounty,
+                            picture_ids: period.pictures.clone(),
                             time: period.end_time,
                         }),
                         PeriodContext::Trophy {

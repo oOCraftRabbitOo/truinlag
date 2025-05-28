@@ -44,10 +44,10 @@ pub struct TimerHook {
 impl Default for TimerHook {
     fn default() -> Self {
         Self {
-            payload: InternEngineCommand::Command(EngineCommand {
+            payload: InternEngineCommand::Command(Box::new(EngineCommand {
                 action: EngineAction::Ping(None),
                 session: None,
-            }),
+            })),
             end_time: chrono::Local::now(),
             id: u64::MAX,
         }
@@ -839,6 +839,7 @@ impl PlayerEntry {
             name: self.name.clone(),
             session: self.session,
             id,
+            picture_id: self.picture,
         }
     }
 }

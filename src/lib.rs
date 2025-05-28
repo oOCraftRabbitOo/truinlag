@@ -12,11 +12,14 @@ pub struct Colour {
     pub b: u8,
 }
 
+/// A binary JPEG-encoded picture. It *should* always be a valid JPEG.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RawPicture {
     data: Vec<u8>,
 }
 
+/// A binary JPEG-encoded picture with some metadata. It *should*
+/// always be a valid JPEG.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Picture {
     pub data: RawPicture,
@@ -371,7 +374,7 @@ pub struct Player {
     pub name: String,
     pub id: u64,
     pub session: Option<u64>,
-    // pub thumb_name: String,
+    pub picture_id: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -379,7 +382,6 @@ pub struct Challenge {
     pub title: String,
     pub description: String,
     pub points: u64,
-    // pub attached_images: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -412,11 +414,13 @@ pub enum Event {
         caught_id: usize,
         bounty: u64,
         time: chrono::NaiveTime,
+        picture_ids: Vec<u64>,
     },
     Complete {
         challenge: Challenge,
         completer_id: usize,
         time: chrono::NaiveTime,
+        picture_ids: Vec<u64>,
     },
 }
 
@@ -427,11 +431,13 @@ impl PartialEq for Event {
                 catcher_id: _,
                 caught_id: _,
                 bounty: _,
+                picture_ids: _,
                 time,
             } => time,
             Event::Complete {
                 challenge: _,
                 completer_id: _,
+                picture_ids: _,
                 time,
             } => time,
         };
@@ -440,11 +446,13 @@ impl PartialEq for Event {
                 catcher_id: _,
                 caught_id: _,
                 bounty: _,
+                picture_ids: _,
                 time,
             } => time,
             Event::Complete {
                 challenge: _,
                 completer_id: _,
+                picture_ids: _,
                 time,
             } => time,
         };
@@ -467,11 +475,13 @@ impl Ord for Event {
                 catcher_id: _,
                 caught_id: _,
                 bounty: _,
+                picture_ids: _,
                 time,
             } => time,
             Event::Complete {
                 challenge: _,
                 completer_id: _,
+                picture_ids: _,
                 time,
             } => time,
         };
@@ -480,11 +490,13 @@ impl Ord for Event {
                 catcher_id: _,
                 caught_id: _,
                 bounty: _,
+                picture_ids: _,
                 time,
             } => time,
             Event::Complete {
                 challenge: _,
                 completer_id: _,
+                picture_ids: _,
                 time,
             } => time,
         };

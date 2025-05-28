@@ -16,7 +16,7 @@ use truinlag::commands::{self, *};
 #[derive(Debug)]
 pub enum EngineSignal {
     Command {
-        command: commands::EngineCommandPackage,
+        command: Box<commands::EngineCommandPackage>,
         channel: oneshot::Sender<IOSignal>,
     },
     BroadcastRequest(oneshot::Sender<broadcast::Receiver<IOSignal>>),
@@ -58,9 +58,8 @@ pub enum InternEngineResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(clippy::large_enum_variant)]
 pub enum InternEngineCommand {
-    Command(EngineCommand),
+    Command(Box<EngineCommand>),
     AutoSave,
     UploadedImages(Vec<u64>),
     TeamLeftGracePeriod { session_id: u64, team_id: usize },
@@ -419,7 +418,7 @@ async fn engine(
             } => {
                 handles.append(
                     &mut handle_intern_response(
-                        engine.vroom(InternEngineCommand::Command(package.command)),
+                        engine.vroom(InternEngineCommand::Command(Box::new(package.command))),
                         &broadcast_handle,
                         channel,
                         mpsc_sender.clone(),
@@ -565,7 +564,7 @@ async fn io(
                     let (oneshot_send, oneshot_recv) = oneshot::channel();
                     let command: commands::EngineCommandPackage = bincode::deserialize(&val)?;
                     tx.send(EngineSignal::Command {
-                        command,
+                        command: Box::new(command),
                         channel: oneshot_send,
                     })
                     .await?;

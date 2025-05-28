@@ -62,7 +62,6 @@ pub enum PeriodContext {
         description: String, // the description of the completed challenge
         zone: Option<u64>,   // the zone of the completed challenge
         points: u64,         // the points earned by completing the challenge
-        photo: u64,          // the id of the challenge photo
         id: u64,
     },
 }
@@ -150,7 +149,6 @@ impl TeamEntry {
                         points,
                         id,
                         zone: _,
-                        photo: _,
                     } => Some(CompletedChallenge {
                         title: title.clone(),
                         description: description.clone(),
@@ -264,7 +262,6 @@ impl TeamEntry {
                         description: _,
                         zone: _,
                         points: _,
-                        photo: _,
                         id,
                     } => Some(id),
                     _ => None,
@@ -782,7 +779,6 @@ impl TeamEntry {
                     description: completed.description.clone(),
                     zone: completed.zone,
                     points: completed.points,
-                    photo: 0,
                     id: completed.id,
                 });
                 if let Some(zone) = completed.zone {
