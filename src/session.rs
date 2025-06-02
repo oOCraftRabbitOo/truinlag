@@ -7,7 +7,7 @@ use crate::{
 use bonsaidb::core::schema::Collection;
 use geo::Distance;
 use partially::Partial;
-use rand::{seq::IteratorRandom, thread_rng};
+use rand::{rng, seq::IteratorRandom};
 use serde::{Deserialize, Serialize};
 use strsim::normalized_damerau_levenshtein as strcmp;
 use truinlag::{
@@ -448,9 +448,7 @@ impl Session {
                     .into();
                 }
                 let team_ids = 0..self.teams.len();
-                let catcher_ids = team_ids
-                    .clone()
-                    .choose_multiple(&mut thread_rng(), num_catchers);
+                let catcher_ids = team_ids.clone().choose_multiple(&mut rng(), num_catchers);
                 let runner_ids: Vec<usize> =
                     team_ids.filter(|i| !catcher_ids.contains(i)).collect();
                 let config = self.config();

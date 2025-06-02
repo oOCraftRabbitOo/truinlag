@@ -8,6 +8,7 @@ use bonsaidb::core::{
 };
 use chrono::Datelike;
 use rand::prelude::*;
+use rand::rng;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -191,12 +192,12 @@ impl ChallengeEntry {
             || (matches!(self.kind, Zoneable) && zone_zoneables);
         let zone = match self.random_place {
             Some(place_type) => match place_type {
-                RandomPlaceType::Zone => zone_db.get_all().choose(&mut thread_rng()).cloned(),
+                RandomPlaceType::Zone => zone_db.get_all().choose(&mut rng()).cloned(),
                 RandomPlaceType::SBahnZone => zone_db
                     .get_all()
                     .iter()
                     .filter(|z| z.contents.s_bahn_zone)
-                    .choose(&mut thread_rng())
+                    .choose(&mut rng())
                     .cloned(),
             },
             None => match self.kind {
@@ -217,7 +218,7 @@ impl ChallengeEntry {
                 ZKaff => Some(centre_zone.clone()),
                 Zoneable => {
                     if zone_zoneables {
-                        zone_db.get_all().choose(&mut thread_rng()).cloned()
+                        zone_db.get_all().choose(&mut rng()).cloned()
                     } else {
                         None
                     }
@@ -243,11 +244,7 @@ impl ChallengeEntry {
         }
         points += self.walking_time as i64 * config.points_per_walking_minute as i64;
         points += self.stationary_time as i64 * config.points_per_stationary_minute as i64;
-        let reps = self
-            .repetitions
-            .clone()
-            .choose(&mut thread_rng())
-            .unwrap_or(0);
+        let reps = self.repetitions.clone().choose(&mut rng()).unwrap_or(0);
         points += reps as i64 * self.points_per_rep as i64;
         // zone points
         if let Some(z) = &zone {
@@ -292,7 +289,7 @@ impl ChallengeEntry {
         if !self.fixed {
             points += Normal::new(0_f64, points as f64 * config.relative_standard_deviation)
                 .expect("this cannot fail, since both μ and σ must have real values")
-                .sample(&mut thread_rng())
+                .sample(&mut rng())
                 .round() as i64
         }
 

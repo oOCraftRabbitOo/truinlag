@@ -6,7 +6,7 @@ use super::{
 };
 use chrono::{self, Duration as Dur};
 use geo::Distance;
-use rand::prelude::*;
+use rand::{prelude::*, rng};
 use serde::{Deserialize, Serialize};
 use truinlag::{commands::Error, *};
 
@@ -454,7 +454,7 @@ impl TeamEntry {
                 filtered_raw_challenges
                     .iter()
                     .filter(specific_filter)
-                    .choose_multiple(&mut thread_rng(), config.num_challenges as usize)
+                    .choose_multiple(&mut rng(), config.num_challenges as usize)
                     .iter()
                     .map(|c| {
                         c.contents.challenge(
@@ -486,27 +486,27 @@ impl TeamEntry {
                         other => other,
                     };
                     let chosen_challenges = [
-                        if thread_rng().gen_bool(regio_probability) {
+                        if rng().random_bool(regio_probability) {
                             filtered_raw_challenges
                                 .iter()
                                 .filter(regio_filter)
-                                .choose(&mut thread_rng())
+                                .choose(&mut rng())
                         } else {
                             filtered_raw_challenges
                                 .iter()
                                 .filter(specific_filter)
                                 .filter(near_filter)
-                                .choose(&mut thread_rng())
+                                .choose(&mut rng())
                         },
                         filtered_raw_challenges
                             .iter()
                             .filter(specific_filter)
                             .filter(far_filter)
-                            .choose(&mut thread_rng()),
+                            .choose(&mut rng()),
                         filtered_raw_challenges
                             .iter()
                             .filter(unspecific_filter)
-                            .choose(&mut thread_rng()),
+                            .choose(&mut rng()),
                     ];
                     challenge_or(chosen_challenges)
                 } else {
@@ -553,15 +553,15 @@ impl TeamEntry {
                         filtered_raw_challenges
                             .iter()
                             .filter(perim_far_filter)
-                            .choose(&mut thread_rng()),
+                            .choose(&mut rng()),
                         filtered_raw_challenges
                             .iter()
                             .filter(perim_near_filter)
-                            .choose(&mut thread_rng()),
+                            .choose(&mut rng()),
                         filtered_raw_challenges
                             .iter()
                             .filter(unspecific_filter)
-                            .choose(&mut thread_rng()),
+                            .choose(&mut rng()),
                     ];
                     challenge_or(chosen_challenges)
                 } else {
@@ -596,36 +596,36 @@ impl TeamEntry {
                             .iter()
                             .filter(specific_filter)
                             .filter(perim_far_filter)
-                            .choose(&mut thread_rng()),
+                            .choose(&mut rng()),
                         filtered_raw_challenges
                             .iter()
                             .filter(specific_filter)
                             .filter(perim_near_filter)
-                            .choose(&mut thread_rng()),
+                            .choose(&mut rng()),
                         filtered_raw_challenges
                             .iter()
                             .filter(unspecific_filter)
-                            .choose(&mut thread_rng()),
+                            .choose(&mut rng()),
                     ];
                     // changing 2 challenges to zkaff
                     let ratio = (1.0 - ratio) * config.zkaff_ratio_range.start
                         + ratio * config.zkaff_ratio_range.end;
                     let pool = match ratio {
                         ..=0.0 => false,
-                        0.0..0.5 => thread_rng().gen_bool(ratio * 2.0),
-                        0.5..1.0 => thread_rng().gen_bool((ratio - 0.5) * 2.0),
+                        0.0..0.5 => rng().random_bool(ratio * 2.0),
+                        0.5..1.0 => rng().random_bool((ratio - 0.5) * 2.0),
                         _ => true,
                     };
                     if (ratio < 0.5 && pool) || (ratio >= 0.5 && !pool) {
                         chosen_challenges[0] = filtered_raw_challenges
                             .iter()
                             .filter(zkaff_filter)
-                            .choose(&mut thread_rng());
+                            .choose(&mut rng());
                     } else if ratio >= 0.5 && pool {
                         let kaff_challenges = filtered_raw_challenges
                             .iter()
                             .filter(zkaff_filter)
-                            .choose_multiple(&mut thread_rng(), 2);
+                            .choose_multiple(&mut rng(), 2);
                         chosen_challenges[0] = kaff_challenges.first().cloned();
                         chosen_challenges[1] = kaff_challenges.get(1).cloned();
                     }
@@ -634,11 +634,11 @@ impl TeamEntry {
                     let mut chosen_challenges = filtered_raw_challenges
                         .iter()
                         .filter(zkaff_filter)
-                        .choose_multiple(&mut thread_rng(), config.num_challenges as usize - 1);
+                        .choose_multiple(&mut rng(), config.num_challenges as usize - 1);
                     if let Some(c) = filtered_raw_challenges
                         .iter()
                         .filter(unspecific_filter)
-                        .choose(&mut thread_rng())
+                        .choose(&mut rng())
                     {
                         chosen_challenges.push(c);
                     }
@@ -668,11 +668,11 @@ impl TeamEntry {
                 let mut chosen_challenges = filtered_raw_challenges
                     .iter()
                     .filter(unspecific_filter)
-                    .choose_multiple(&mut thread_rng(), config.num_challenges as usize - 1);
+                    .choose_multiple(&mut rng(), config.num_challenges as usize - 1);
                 if let Some(c) = filtered_raw_challenges
                     .iter()
                     .filter(zkaff_filter)
-                    .choose(&mut thread_rng())
+                    .choose(&mut rng())
                 {
                     chosen_challenges.push(c);
                 }
@@ -695,7 +695,7 @@ impl TeamEntry {
                 }
             }
         };
-        self.challenges.shuffle(&mut thread_rng());
+        self.challenges.shuffle(&mut rng());
     }
 
     /// Some weird bad code that still works and is used in challenge generation. Will try to
@@ -721,10 +721,7 @@ impl TeamEntry {
                     ChallengeType::Kaff | ChallengeType::Ortsspezifisch | ChallengeType::Zoneable
                 )
             })
-            .choose_multiple(
-                &mut thread_rng(),
-                context.config.num_challenges as usize - 1,
-            );
+            .choose_multiple(&mut rng(), context.config.num_challenges as usize - 1);
         let mut challenges: Vec<InOpenChallenge> = challenges
             .iter()
             .map(|c| {
@@ -877,7 +874,7 @@ fn smart_choose(
     points_to_top: Option<u64>,
     context: &SessionContext,
 ) -> InOpenChallenge {
-    match challenges.iter().enumerate().choose(&mut thread_rng()) {
+    match challenges.iter().enumerate().choose(&mut rng()) {
         None => {
             eprintln!(
                 "Engine: {} Not enough challenges, context: {}. \
@@ -886,7 +883,7 @@ fn smart_choose(
                 context_message
             );
             let selected = raw_challenges
-                .choose(&mut thread_rng())
+                .choose(&mut rng())
                 .cloned()
                 .unwrap_or_else(|| {
                     eprintln!(
@@ -899,7 +896,7 @@ fn smart_choose(
                         .engine_context
                         .challenge_db
                         .get_all()
-                        .choose(&mut thread_rng())
+                        .choose(&mut rng())
                         .expect(
                             "There were no raw challenges, \
                             that should never happen",
@@ -947,7 +944,7 @@ fn get_period(config: &Config) -> GenerationPeriod {
     } else if now >= config.end_time {
         GenerationPeriod::EndGame
     } else {
-        let wiggle = chrono::Duration::seconds(thread_rng().gen_range(
+        let wiggle = chrono::Duration::seconds(rng().random_range(
             -60 * config.time_wiggle_minutes as i64..=60 * config.time_wiggle_minutes as i64,
         ));
         now += wiggle;

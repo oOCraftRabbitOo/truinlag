@@ -1,10 +1,9 @@
 use crate::{
-    challenge::{ChallengeEntry, ChallengeSetEntry, InOpenChallenge},
+    challenge::{ChallengeEntry, ChallengeSetEntry},
     runtime::{
         InternEngineCommand, InternEngineResponse, InternEngineResponsePackage, RuntimeRequest,
     },
     session::Session,
-    team::{Period, TeamEntry},
     ClonedDBEntry, DBMirror, EngineContext, EngineSchema, PastGame, PictureEntry, PlayerEntry,
     TimerTracker, ZoneEntry,
 };
@@ -15,7 +14,6 @@ use bonsaidb::{
         AsyncDatabase, Database, Storage,
     },
 };
-use chrono::NaiveTime;
 use std::{
     collections::HashMap,
     path::Path,
