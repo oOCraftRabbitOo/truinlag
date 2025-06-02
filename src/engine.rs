@@ -137,6 +137,8 @@ impl Engine {
     /// );
     /// ```
     pub fn init(storage_path: &Path) -> Self {
+        println!("Engine: initialising...");
+        println!("Engine: opening database...");
         let db = Storage::open(
             config::StorageConfiguration::new(storage_path)
                 .with_schema::<EngineSchema>()
@@ -153,44 +155,47 @@ impl Engine {
         //     .map(|doc| doc.header.id)
         //     .collect();
 
+        println!("Engine: loading challenges...");
         let challenges = DBMirror::from_db(&db);
+        println!("Engine: loading challenge sets...");
         let challenge_sets = DBMirror::from_db(&db);
+        println!("Engine: loading zones...");
         let zones = DBMirror::from_db(&db);
+        println!("Engine: loading sessions...");
         let sessions: DBMirror<Session> = DBMirror::from_db(&db);
+        println!("Engine: loading players...");
         let players = DBMirror::from_db(&db);
+        println!("Engine: loading past games...");
         let past_games = DBMirror::from_db(&db);
+        println!("Engine: loading pictures...");
         let pictures = DBMirror::from_db(&db);
+        println!("Engine: done!");
 
-        let sessionista = sessions.get_all();
-        for session in sessionista {
-            println!("Size of session {}:", session.contents.name);
-            let mut teams_size = 0;
-            for team in &session.contents.teams {
-                let mut team_size = 0;
-                println!("Size of team {}:", team.name);
-                let locations_size = team.locations.capacity() * size_of::<(f64, f64, NaiveTime)>();
-                println!("Locations: {}", locations_size);
-                let periods_size = team.periods.capacity() * size_of::<Period>();
-                println!("Periods: {}", periods_size);
-                team_size += locations_size + periods_size;
-                team_size += size_of::<TeamEntry>();
-                println!("Total: {}", team_size);
-                teams_size += team_size;
-                let mut size = size_of_val(team); // Stack part
-
-                size += team.name.capacity(); // String heap
-
-                size += team.players.capacity() * std::mem::size_of::<u64>();
-
-                size += team.locations.capacity() * std::mem::size_of::<(f64, f64, NaiveTime)>();
-
-                size += team.challenges.capacity() * std::mem::size_of::<InOpenChallenge>();
-
-                size += team.periods.capacity() * std::mem::size_of::<Period>();
-                println!("Other total: {}\n", size);
-            }
-            println!("\nTotal: {}", teams_size + size_of::<Session>());
-        }
+        // let sessionista = sessions.get_all();
+        // for session in sessionista {
+        //     println!("Size of session {}:", session.contents.name);
+        //     let mut teams_size = 0;
+        //     for team in &session.contents.teams {
+        //         let mut team_size = 0;
+        //         println!("Size of team {}:", team.name);
+        //         let locations_size = team.locations.capacity() * size_of::<(f64, f64, NaiveTime)>();
+        //         println!("Locations: {}", locations_size);
+        //         let periods_size = team.periods.capacity() * size_of::<Period>();
+        //         println!("Periods: {}", periods_size);
+        //         team_size += locations_size + periods_size;
+        //         team_size += size_of::<TeamEntry>();
+        //         println!("Total: {}", team_size);
+        //         teams_size += team_size;
+        //         let mut size = size_of_val(team); // Stack part
+        //         size += team.name.capacity(); // String heap
+        //         size += team.players.capacity() * std::mem::size_of::<u64>();
+        //         size += team.locations.capacity() * std::mem::size_of::<(f64, f64, NaiveTime)>();
+        //         size += team.challenges.capacity() * std::mem::size_of::<InOpenChallenge>();
+        //         size += team.periods.capacity() * std::mem::size_of::<Period>();
+        //         println!("Other total: {}\n", size);
+        //     }
+        //     println!("\nTotal: {}", teams_size + size_of::<Session>());
+        // }
 
         Engine {
             db,
