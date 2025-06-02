@@ -766,6 +766,13 @@ impl TeamEntry {
         if let Some(current_location) = &self.current_location {
             self.locations.push(current_location.clone().into());
         }
+        if self.locations.is_empty() {
+            self.locations.push(MinimalLocation {
+                latitude: 0.0,
+                longitude: 0.0,
+                timestamp: 0,
+            });
+        }
         self.periods.push(Period {
             context,
             pictures: Vec::new(),
