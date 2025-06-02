@@ -27,6 +27,7 @@ pub struct MinimalLocation {
     pub timestamp: Timestamp,
 }
 
+#[cfg(feature = "build-binary")]
 impl MinimalLocation {
     pub fn as_point(&self) -> geo::Point<f64> {
         geo::Point::from((self.latitude as f64, self.longitude as f64))
