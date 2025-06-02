@@ -1,5 +1,4 @@
 use super::*;
-use chrono::NaiveTime;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -87,7 +86,7 @@ pub enum EngineAction {
     },
     SendLocation {
         player: u64,
-        location: (f64, f64),
+        location: DetailedLocation,
     },
     SetRawChallenge(InputChallenge),
     AddRawChallenge(InputChallenge),
@@ -166,7 +165,7 @@ pub enum ResponseAction {
     UploadedPictures(Vec<u64>),
     Period(usize),
     Pictures(Vec<Picture>),
-    SendLocations(Vec<(Team, Vec<(f64, f64, NaiveTime)>)>),
+    SendLocations(Vec<(Team, Vec<MinimalLocation>)>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -187,7 +186,7 @@ pub enum BroadcastAction {
     Pinged(Option<String>),
     Location {
         team: usize,
-        location: (f64, f64),
+        location: MinimalLocation,
     },
     PlayerChangedSession {
         player: Player,

@@ -5,6 +5,44 @@ use std::str::FromStr;
 pub mod api;
 pub mod commands;
 
+type Timestamp = i64;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetailedLocation {
+    pub latitude: f32,
+    pub longitude: f32,
+    /// accuracy in metres
+    pub accuracy: u16,
+    /// heading in degrees. 0º is north (hopefully)
+    pub heading: f32,
+    /// speed in m/s
+    pub speed: f32,
+    pub timestamp: Timestamp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MinimalLocation {
+    pub latitude: f32,
+    pub longitude: f32,
+    pub timestamp: Timestamp,
+}
+
+impl MinimalLocation {
+    pub fn as_point(&self) -> geo::Point<f64> {
+        geo::Point::from((self.latitude as f64, self.longitude as f64))
+    }
+}
+
+impl From<DetailedLocation> for MinimalLocation {
+    fn from(value: DetailedLocation) -> Self {
+        MinimalLocation {
+            latitude: value.latitude,
+            longitude: value.longitude,
+            timestamp: value.timestamp,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Colour {
     pub r: u8,
@@ -33,13 +71,6 @@ impl TryFrom<DynamicImage> for RawPicture {
         Self::from_img(img)
     }
 }
-
-// impl TryFrom<Picture> for DynamicImage {
-//     type Error = image::ImageError;
-//     fn try_from(jpeg: Picture) -> Result<Self, image::ImageError> {
-//         jpeg.try_into_img()
-//     }
-// }
 
 impl From<RawPicture> for DynamicImage {
     fn from(jpeg: RawPicture) -> Self {
@@ -365,7 +396,7 @@ pub struct Team {
     pub challenges: Vec<Challenge>,
     pub completed_challenges: Vec<CompletedChallenge>,
     // pub thumb_name: String,
-    pub location: Option<(f64, f64)>,
+    pub location: Option<(f32, f32)>,
     pub in_grace_period: bool,
 }
 

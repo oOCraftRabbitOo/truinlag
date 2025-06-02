@@ -4,10 +4,10 @@ use super::{
     challenge::{ChallengeEntry, InOpenChallenge},
     Config, DBEntry, ZoneEntry,
 };
-use chrono::{self, Duration as Dur, NaiveTime};
+use chrono::{self, Duration as Dur};
+use geo::Distance;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::cmp::min;
 use truinlag::{commands::Error, *};
 
 /// The representation of a team in a running or future game in the db
@@ -24,7 +24,10 @@ pub struct TeamEntry {
     pub bounty: u64,
     #[serde(default)]
     pub current_zone_id: u64,
-    pub locations: Vec<(f64, f64, NaiveTime)>,
+    pub current_location: Option<DetailedLocation>,
+    pub locations: Vec<MinimalLocation>,
+    #[serde(default)]
+    pub location_sending_player: Option<u64>,
     pub challenges: Vec<InOpenChallenge>,
     pub periods: Vec<Period>,
     #[serde(default)]
@@ -37,8 +40,8 @@ pub struct Period {
     #[serde(default)]
     pub pictures: Vec<u64>,
     pub context: PeriodContext,
-    pub position_start_index: u64,
-    pub position_end_index: u64,
+    pub location_start_index: usize,
+    pub location_end_index: usize,
     pub end_time: chrono::NaiveTime,
 }
 
@@ -108,7 +111,9 @@ impl TeamEntry {
             role: TeamRole::Runner,
             points: 0,
             bounty: 0,
+            current_location: None,
             locations: Vec::new(),
+            location_sending_player: None,
             periods: Vec::new(),
             current_zone_id: config.start_zone,
             grace_period_end: None,
@@ -160,7 +165,10 @@ impl TeamEntry {
                     _ => None,
                 })
                 .collect(),
-            location: self.locations.last().map(|loc| (loc.0, loc.1)),
+            location: self
+                .locations
+                .last()
+                .map(|loc| (loc.latitude, loc.longitude)),
             in_grace_period: match &self.grace_period_end {
                 None => false,
                 Some(timer) => chrono::Local::now() <= timer.end_time,
@@ -168,11 +176,70 @@ impl TeamEntry {
         }
     }
 
-    /// Returns the team's current location
-    pub fn location(&self) -> Option<(f64, f64)> {
+    pub fn add_location(
+        &mut self,
+        location: DetailedLocation,
+        by_player: u64,
+    ) -> Option<MinimalLocation> {
+        match self.current_location.clone() {
+            None => Some(self.definitely_add_location(location)),
+            Some(old_location) => {
+                match self.location_sending_player {
+                    None => {
+                        self.location_sending_player = Some(by_player);
+                        return Some(self.definitely_add_location(location));
+                    }
+                    Some(player) => {
+                        if by_player == player {
+                            return Some(self.definitely_add_location(location));
+                        }
+                    }
+                }
+
+                let time_since_last_location = location.timestamp - old_location.timestamp;
+                if time_since_last_location > 10 {
+                    self.location_sending_player = Some(by_player);
+                    return Some(self.definitely_add_location(location));
+                }
+
+                if old_location.accuracy / location.accuracy > 3 {
+                    self.location_sending_player = Some(by_player);
+                    return Some(self.definitely_add_location(location));
+                }
+
+                None
+            }
+        }
+    }
+
+    fn definitely_add_location(&mut self, location: DetailedLocation) -> MinimalLocation {
+        self.current_location = Some(location.clone());
+        match self.locations.last() {
+            None => self.locations.push(location.clone().into()),
+            Some(old_loc) => {
+                let new_loc = MinimalLocation::from(location.clone());
+                if geo::Geodesic.distance(old_loc.as_point(), new_loc.as_point()) > 20.0
+                    && new_loc.timestamp - old_loc.timestamp > 10
+                {
+                    self.locations.push(new_loc);
+                }
+            }
+        }
+        location.into()
+    }
+
+    /// Returns the team's current location as a geo `Point`.
+    pub fn location_as_point(&self) -> Option<geo::Point<f64>> {
         self.locations
             .last()
-            .map(|location| (location.0, location.1))
+            .map(|l| geo::Point::from((l.latitude as f64, l.longitude as f64)))
+    }
+
+    /// Returns the team's current location
+    pub fn location(&self) -> Option<(f32, f32)> {
+        self.locations
+            .last()
+            .map(|location| (location.latitude, location.longitude))
     }
 
     /// Resets the team and has it start out as a gatherer team
@@ -699,15 +766,18 @@ impl TeamEntry {
     /// Adds a new period with the provided context and pictures to the team with the end time
     /// being now.
     fn new_period(&mut self, context: PeriodContext) {
+        if let Some(current_location) = &self.current_location {
+            self.locations.push(current_location.clone().into());
+        }
         self.periods.push(Period {
             context,
             pictures: Vec::new(),
-            position_start_index: self
+            location_start_index: self
                 .periods
                 .last()
-                .map(|p| p.position_end_index + 1)
+                .map(|p| p.location_end_index + 1)
                 .unwrap_or(0),
-            position_end_index: self.locations.len() as u64 - 1,
+            location_end_index: self.locations.len() - 1,
             end_time: chrono::Local::now().time(),
         });
     }

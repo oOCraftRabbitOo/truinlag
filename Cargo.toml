@@ -24,7 +24,7 @@ chrono = { version = "0.4", features = ["serde"] }
 partially = { version = "0.2", features = ["derive"] }
 image = "0.25"
 serialimage = "4.1"
-geo = { version = "0.28", features = ["serde"], optional = true }
+geo = { version = "0.30", features = ["serde"], optional = true }
 strsim = { version = "0.11", optional = true }
 
 [features]

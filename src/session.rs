@@ -5,7 +5,7 @@ use crate::{
     Config, EngineContext, InGame, PartialConfig, PastGame, PictureEntry, SessionContext,
 };
 use bonsaidb::core::schema::Collection;
-use geo::GeodesicDistance;
+use geo::Distance;
 use partially::Partial;
 use rand::{seq::IteratorRandom, thread_rng};
 use serde::{Deserialize, Serialize};
@@ -193,25 +193,29 @@ impl Session {
     }
 
     /// Corresponds to an `EngineAction` and processes a given players' location update
-    fn send_location(&mut self, player: u64, location: (f64, f64)) -> InternEngineResponsePackage {
+    fn send_location(
+        &mut self,
+        player: u64,
+        location: DetailedLocation,
+    ) -> InternEngineResponsePackage {
         match self
             .teams
-            .iter()
-            .position(|t| t.players.iter().any(|&p| p == player))
+            .iter_mut()
+            .enumerate()
+            .find(|(_, t)| t.players.iter().any(|&p| p == player))
         {
             None => Error(NotFound(format!("team with the player with id {}", player))).into(),
-            Some(team) => {
-                self.teams[team].locations.push((
-                    location.0,
-                    location.1,
-                    chrono::offset::Local::now().time(),
-                ));
-                EngineResponse {
+            Some((team_id, team)) => match team.add_location(location, player) {
+                Some(location) => EngineResponse {
                     response_action: Success,
-                    broadcast_action: Some(Location { team, location }),
+                    broadcast_action: Some(Location {
+                        team: team_id,
+                        location,
+                    }),
                 }
-                .into()
-            }
+                .into(),
+                None => Success.into(),
+            },
         }
     }
 
@@ -283,10 +287,10 @@ impl Session {
                                         && catcher_team.location().is_some()
                                     {
                                         let caught_location =
-                                            geo::Point::from(caught_team.location().unwrap());
+                                            caught_team.location_as_point().unwrap();
                                         let catcher_location =
-                                            geo::Point::from(catcher_team.location().unwrap());
-                                        if caught_location.geodesic_distance(&catcher_location)
+                                            catcher_team.location_as_point().unwrap();
+                                        if geo::Geodesic.distance(caught_location, catcher_location)
                                             > 300.0
                                         {
                                             return Error(TeamsTooFar).into();

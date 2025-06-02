@@ -959,8 +959,8 @@ struct PastTeam {
     points: u64,
     bounty: u64,
     end_zone_id: u64,
-    start_location: Option<(f64, f64)>,
-    end_location: Option<(f64, f64)>,
+    start_location: Option<(f32, f32)>,
+    end_location: Option<(f32, f32)>,
     end_challenges: Vec<InOpenChallenge>,
     periods: Vec<PastPeriod>,
 }
@@ -970,15 +970,15 @@ struct PastTeam {
 struct PastPeriod {
     pub context: PeriodContext,
     pub end_time: chrono::DateTime<chrono::Local>,
-    pub end_location: (f64, f64),
+    pub end_location: (f32, f32),
 }
 
 impl From<TeamEntry> for PastTeam {
     fn from(value: TeamEntry) -> Self {
         let start_location = value.locations.first();
-        let start_location = start_location.map(|v| (v.0, v.1));
+        let start_location = start_location.map(|v| (v.latitude, v.longitude));
         let end_location = value.locations.last();
-        let end_location = end_location.map(|v| (v.0, v.1));
+        let end_location = end_location.map(|v| (v.latitude, v.longitude));
         Self {
             name: value.name,
             players: value.players,
@@ -999,8 +999,8 @@ impl From<TeamEntry> for PastTeam {
                     end_time: chrono::Local::now().with_time(p.end_time).unwrap(),
                     end_location: value
                         .locations
-                        .get(p.position_end_index as usize)
-                        .map(|l| (l.0, l.1))
+                        .get(p.location_end_index)
+                        .map(|l| (l.latitude, l.longitude))
                         .unwrap_or((0.0, 0.0)),
                 })
                 .collect(),
