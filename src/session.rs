@@ -433,6 +433,7 @@ impl Session {
 
     /// Corresponds to an `EngineAction` and starts the game
     fn start(&mut self, context: &mut SessionContext) -> InternEngineResponsePackage {
+        println!("starting game...");
         match self.game {
             Some(_) => Error(GameInProgress).into(),
             None => {

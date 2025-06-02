@@ -713,7 +713,7 @@ impl Default for Config {
             bounty_percentage: 0.25,
             start_time: chrono::NaiveTime::from_hms_opt(9, 0, 0)
                 .expect("This is hardcoded and should never fail"),
-            end_time: chrono::NaiveTime::from_hms_opt(17, 0, 0)
+            end_time: chrono::NaiveTime::from_hms_opt(22, 0, 0)
                 .expect("This is hardcoded and should never fail"),
             specific_minutes: 15,
             perimeter_minutes: 90,
