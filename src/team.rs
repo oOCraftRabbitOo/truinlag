@@ -177,7 +177,7 @@ impl TeamEntry {
         &mut self,
         location: DetailedLocation,
         by_player: u64,
-    ) -> Option<MinimalLocation> {
+    ) -> Option<DetailedLocation> {
         match self.current_location.clone() {
             None => Some(self.definitely_add_location(location)),
             Some(old_location) => {
@@ -209,7 +209,7 @@ impl TeamEntry {
         }
     }
 
-    fn definitely_add_location(&mut self, location: DetailedLocation) -> MinimalLocation {
+    fn definitely_add_location(&mut self, location: DetailedLocation) -> DetailedLocation {
         self.current_location = Some(location.clone());
         match self.locations.last() {
             None => self.locations.push(location.clone().into()),
@@ -222,7 +222,7 @@ impl TeamEntry {
                 }
             }
         }
-        location.into()
+        location
     }
 
     /// Returns the team's current location as a geo `Point`.

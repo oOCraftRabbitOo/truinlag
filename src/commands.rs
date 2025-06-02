@@ -186,7 +186,7 @@ pub enum BroadcastAction {
     Pinged(Option<String>),
     Location {
         team: usize,
-        location: MinimalLocation,
+        location: DetailedLocation,
     },
     PlayerChangedSession {
         player: Player,
