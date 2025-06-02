@@ -165,10 +165,7 @@ impl TeamEntry {
                     _ => None,
                 })
                 .collect(),
-            location: self
-                .locations
-                .last()
-                .map(|loc| (loc.latitude, loc.longitude)),
+            location: self.current_location.clone(),
             in_grace_period: match &self.grace_period_end {
                 None => false,
                 Some(timer) => chrono::Local::now() <= timer.end_time,

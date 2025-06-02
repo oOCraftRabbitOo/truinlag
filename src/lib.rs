@@ -396,7 +396,7 @@ pub struct Team {
     pub challenges: Vec<Challenge>,
     pub completed_challenges: Vec<CompletedChallenge>,
     // pub thumb_name: String,
-    pub location: Option<(f32, f32)>,
+    pub location: Option<DetailedLocation>,
     pub in_grace_period: bool,
 }
 
