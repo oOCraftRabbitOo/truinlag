@@ -179,16 +179,16 @@ impl TeamEntry {
         by_player: u64,
     ) -> Option<DetailedLocation> {
         match self.current_location.clone() {
-            None => Some(self.definitely_add_location(location)),
+            None => Some(self.definitely_add_location(location, by_player)),
             Some(old_location) => {
                 match self.location_sending_player {
                     None => {
                         self.location_sending_player = Some(by_player);
-                        return Some(self.definitely_add_location(location));
+                        return Some(self.definitely_add_location(location, by_player));
                     }
                     Some(player) => {
                         if by_player == player {
-                            return Some(self.definitely_add_location(location));
+                            return Some(self.definitely_add_location(location, by_player));
                         }
                     }
                 }
@@ -196,12 +196,12 @@ impl TeamEntry {
                 let time_since_last_location = location.timestamp - old_location.timestamp;
                 if time_since_last_location > 10 {
                     self.location_sending_player = Some(by_player);
-                    return Some(self.definitely_add_location(location));
+                    return Some(self.definitely_add_location(location, by_player));
                 }
 
                 if old_location.accuracy / location.accuracy > 3 {
                     self.location_sending_player = Some(by_player);
-                    return Some(self.definitely_add_location(location));
+                    return Some(self.definitely_add_location(location, by_player));
                 }
 
                 None
@@ -209,8 +209,13 @@ impl TeamEntry {
         }
     }
 
-    fn definitely_add_location(&mut self, location: DetailedLocation) -> DetailedLocation {
+    fn definitely_add_location(
+        &mut self,
+        location: DetailedLocation,
+        by_player: u64,
+    ) -> DetailedLocation {
         self.current_location = Some(location.clone());
+        self.location_sending_player = Some(by_player);
         match self.locations.last() {
             None => self.locations.push(location.clone().into()),
             Some(old_loc) => {
@@ -227,8 +232,8 @@ impl TeamEntry {
 
     /// Returns the team's current location as a geo `Point`.
     pub fn location_as_point(&self) -> Option<geo::Point<f64>> {
-        self.locations
-            .last()
+        self.current_location
+            .clone()
             .map(|l| geo::Point::from((l.latitude as f64, l.longitude as f64)))
     }
 
