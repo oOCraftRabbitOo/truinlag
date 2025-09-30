@@ -295,6 +295,11 @@ impl Session {
                                         {
                                             return Error(TeamsTooFar).into();
                                         }
+                                    } else {
+                                        eprintln!(
+                                            "engine: session: no location for team {} or {}",
+                                            catcher_team.name, caught_team.name
+                                        )
                                     }
                                     bounty = caught_team.bounty;
                                     broadcast = Caught {
