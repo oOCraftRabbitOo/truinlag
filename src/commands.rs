@@ -223,6 +223,7 @@ pub enum Error {
     BadData(String),
     TextError(String), // Some other kind of error with a custom text
     PictureProblem,    // An Image-related error
+    TooRapid,          // When requests are sent too rapidly
 }
 
 impl std::fmt::Display for Error {
@@ -243,7 +244,8 @@ impl std::fmt::Display for Error {
             Self::TeamsTooFar => write!(f, "the teams are too far away from each other"),
             Self::BadData(text) => write!(f, "bad data: {}", text),
             Self::TextError(text) => write!(f, "{}", text),
-            Self::PictureProblem => write!(f, "there was a problem processing an image")
+            Self::PictureProblem => write!(f, "there was a problem processing an image"),
+            Self::TooRapid => write!(f, "not enough time has passed since the last request, hold your horses"),
         }
     }
 }

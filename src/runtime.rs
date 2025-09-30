@@ -416,7 +416,7 @@ async fn engine(
         }
         handles
     }
-    let mut engine = engine::Engine::init(Path::new("truintabase"));
+    let mut engine = tokio::task::block_in_place(|| engine::Engine::init(Path::new("truintabase")));
     let mut handles = handle_runtime_requests(engine.setup().runtime_requests, &mpsc_sender).await;
     loop {
         handles.retain(|(_, h)| !h.is_finished());
@@ -429,13 +429,17 @@ async fn engine(
                 command: package,
                 channel,
             } => {
+                let command = package.command;
+                let id = package.id;
                 handles.append(
                     &mut handle_intern_response(
-                        engine.vroom(InternEngineCommand::Command(Box::new(package.command))),
+                        tokio::task::block_in_place(|| {
+                            engine.vroom(InternEngineCommand::Command(Box::new(command)))
+                        }),
                         &broadcast_handle,
                         channel,
                         mpsc_sender.clone(),
-                        package.id,
+                        id,
                     )
                     .await,
                 );
@@ -447,7 +451,7 @@ async fn engine(
             } => {
                 handles.append(
                     &mut handle_intern_response(
-                        engine.vroom(command),
+                        tokio::task::block_in_place(|| engine.vroom(command)),
                         &broadcast_handle,
                         channel,
                         mpsc_sender.clone(),

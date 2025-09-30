@@ -356,20 +356,32 @@ impl Session {
     ) -> InternEngineResponsePackage {
         match self.game {
             Some(_) => match self.teams.get_mut(completer) {
-                Some(completer_team) => match completer_team.complete_challenge(completed, context)
-                {
-                    Ok((completed, request)) => InternEngineResponsePackage {
-                        response: InternEngineResponse::DirectResponse(EngineResponse {
-                            response_action: Period(completer_team.periods.len() - 1),
-                            broadcast_action: Some(BroadcastAction::Completed {
-                                completer: completer_team.to_sendable(completer, context),
-                                completed: completed.to_sendable(),
+                Some(completer_team) => {
+                    if completer_team
+                        .periods
+                        .last()
+                        .map(|p| {
+                            chrono::TimeDelta::seconds(30)
+                                <= chrono::Local::now().time() - p.end_time
+                        })
+                        .unwrap_or(false)
+                    {
+                        return Error(TooRapid).into();
+                    }
+                    match completer_team.complete_challenge(completed, context) {
+                        Ok((completed, request)) => InternEngineResponsePackage {
+                            response: InternEngineResponse::DirectResponse(EngineResponse {
+                                response_action: Period(completer_team.periods.len() - 1),
+                                broadcast_action: Some(BroadcastAction::Completed {
+                                    completer: completer_team.to_sendable(completer, context),
+                                    completed: completed.to_sendable(),
+                                }),
                             }),
-                        }),
-                        runtime_requests: request.map(|r| vec![r]),
-                    },
-                    Err(err) => Error(err).into(),
-                },
+                            runtime_requests: request.map(|r| vec![r]),
+                        },
+                        Err(err) => Error(err).into(),
+                    }
+                }
                 None => Error(NotFound(format!("completer team with id {}", completer))).into(),
             },
             None => Error(GameNotRunning).into(),
