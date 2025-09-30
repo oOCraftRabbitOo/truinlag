@@ -234,9 +234,9 @@ impl TeamEntry {
 
     /// Returns the team's current location
     pub fn location(&self) -> Option<(f32, f32)> {
-        self.locations
-            .last()
-            .map(|location| (location.latitude, location.longitude))
+        self.current_location
+            .clone()
+            .map(|l| (l.latitude, l.longitude))
     }
 
     /// Resets the team and has it start out as a gatherer team
