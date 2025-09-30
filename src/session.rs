@@ -366,8 +366,8 @@ impl Session {
                         .periods
                         .last()
                         .map(|p| {
-                            chrono::TimeDelta::seconds(30)
-                                <= chrono::Local::now().time() - p.end_time
+                            chrono::Local::now().time() - p.end_time
+                                <= chrono::TimeDelta::seconds(30)
                         })
                         .unwrap_or(false)
                     {
