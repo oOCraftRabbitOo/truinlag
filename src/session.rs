@@ -708,7 +708,7 @@ impl Session {
                     .split_at(
                         match team
                             .locations
-                            .binary_search_by(|loc| loc.timestamp.cmp(&secs))
+                            .binary_search_by(|loc| secs.cmp(&loc.timestamp))
                         {
                             Ok(i) => i,
                             Err(i) => i,
