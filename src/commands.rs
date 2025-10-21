@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use super::*;
 use serde::{Deserialize, Serialize};
 
@@ -141,6 +143,10 @@ pub enum EngineAction {
     GetThumbnails(Vec<u64>),
     GetPictures(Vec<u64>),
     GetLocations,
+    GetPastLocations {
+        team_id: usize,
+        of_past_seconds: Option<NonZeroU32>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -166,6 +172,10 @@ pub enum ResponseAction {
     Period(usize),
     Pictures(Vec<Picture>),
     SendLocations(Vec<(Team, Vec<MinimalLocation>)>),
+    SendPastLocations {
+        team_id: usize,
+        locations: Vec<MinimalLocation>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

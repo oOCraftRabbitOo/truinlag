@@ -199,7 +199,7 @@ impl TeamEntry {
                     return Some(self.definitely_add_location(location, by_player));
                 }
 
-                if old_location.accuracy / location.accuracy > 3 {
+                if old_location.accuracy / location.accuracy > 1 {
                     self.location_sending_player = Some(by_player);
                     return Some(self.definitely_add_location(location, by_player));
                 }

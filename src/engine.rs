@@ -897,6 +897,10 @@ impl Engine {
                 period: _,
             } => Error(NoSessionSupplied).into(),
             GetLocations => Error(NoSessionSupplied).into(),
+            GetPastLocations {
+                team_id: _,
+                of_past_seconds: _,
+            } => Error(NoSessionSupplied).into(),
         }
     }
 }

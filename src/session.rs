@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use crate::{
     challenge::InOpenChallenge,
     runtime::{InternEngineCommand, InternEngineResponse, InternEngineResponsePackage},
@@ -687,6 +689,39 @@ impl Session {
         .into()
     }
 
+    fn send_past_locations(
+        &self,
+        team_id: usize,
+        of_past_seconds: Option<NonZeroU32>,
+    ) -> InternEngineResponsePackage {
+        let team = match self.teams.get(team_id) {
+            Some(team) => team,
+            None => return Error(NotFound(format!("team with id {team_id}"))).into(),
+        };
+        let target_time =
+            of_past_seconds.map(|secs| chrono::Local::now().timestamp() - secs.get() as i64);
+        SendPastLocations {
+            team_id,
+            locations: match target_time {
+                Some(secs) => team
+                    .locations
+                    .split_at(
+                        match team
+                            .locations
+                            .binary_search_by(|loc| loc.timestamp.cmp(&secs))
+                        {
+                            Ok(i) => i,
+                            Err(i) => i,
+                        },
+                    )
+                    .1
+                    .to_vec(),
+                None => team.locations.clone(),
+            },
+        }
+        .into()
+    }
+
     /// The core method of the session that processes commands with sessions.
     ///
     /// The method takes a command to process, as well as a session id. This should be the id of
@@ -701,6 +736,10 @@ impl Session {
     ) -> InternEngineResponsePackage {
         let mut context = self.context(context, session_id);
         match command {
+            GetPastLocations {
+                team_id,
+                of_past_seconds,
+            } => self.send_past_locations(team_id, of_past_seconds),
             GetLocations => self.send_locations(context),
             UploadPeriodPictures {
                 pictures,
