@@ -167,10 +167,14 @@ pub async fn manager() -> Result<()> {
 
     let io_tasks_2 = io_tasks.clone();
 
-    let socket = "/tmp/truinsocket";
+    let socket = format!(
+        "truinsocket_{}{}",
+        if cfg!(debug_assertions) { "dev_" } else { "" },
+        env!("CARGO_PKG_VERSION")
+    );
 
     println!("Manager: binding to socket {}", socket);
-    let listener = net::UnixListener::bind(socket).expect(
+    let listener = net::UnixListener::bind(&socket).expect(
         "Manager: cannot bind to socket (maybe other instance running, truinlag improperly terminated, etc.)",
     );
 
