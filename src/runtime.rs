@@ -168,7 +168,7 @@ pub async fn manager() -> Result<()> {
     let io_tasks_2 = io_tasks.clone();
 
     let socket = format!(
-        "truinsocket_{}{}",
+        "/tmp/truinsocket_{}{}",
         if cfg!(debug_assertions) { "dev_" } else { "" },
         env!("CARGO_PKG_VERSION")
     );
