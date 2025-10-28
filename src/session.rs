@@ -571,7 +571,7 @@ impl Session {
 
         // reset teams
         for team in &mut self.teams {
-            let _ = team.reset(context);
+            // let _ = team.reset(context);
             // we can ignore the potential error here, since the start zone is not relevant when
             // stopping the game.
             if let Some(timer) = &team.grace_period_end {
