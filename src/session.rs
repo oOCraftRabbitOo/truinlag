@@ -2,7 +2,9 @@ use std::num::NonZeroU32;
 
 use crate::{
     challenge::InOpenChallenge,
-    runtime::{InternEngineCommand, InternEngineResponse, InternEngineResponsePackage},
+    runtime::{
+        InternEngineCommand, InternEngineResponse, InternEngineResponsePackage, RuntimeRequest,
+    },
     team::{PeriodContext, TeamEntry},
     Config, EngineContext, InGame, PartialConfig, PastGame, PictureEntry, SessionContext,
 };
@@ -56,6 +58,24 @@ impl Session {
             discord_game_channel: None,
             discord_admin_channel: None,
             game: None,
+        }
+    }
+
+    /// Gets called by the engine on startup and returns runtime requests for all timers that need
+    /// to be restarted.
+    pub fn setup(&self) -> Vec<RuntimeRequest> {
+        match &self.game {
+            None => Vec::new(),
+            Some(game) => {
+                let mut requests = Vec::new();
+                requests.push(game.timer.create_request());
+                for team in &self.teams {
+                    if let Some(hook) = &team.grace_period_end {
+                        requests.push(hook.create_request());
+                    }
+                }
+                requests
+            }
         }
     }
 
@@ -205,7 +225,7 @@ impl Session {
             .teams
             .iter_mut()
             .enumerate()
-            .find(|(_, t)| t.players.iter().any(|&p| p == player))
+            .find(|(_, t)| t.players.contains(&player))
         {
             None => Error(NotFound(format!("team with the player with id {}", player))).into(),
             Some((team_id, team)) => match team.add_location(location, player) {

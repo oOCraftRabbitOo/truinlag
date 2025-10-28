@@ -211,20 +211,34 @@ impl Engine {
         }
     }
 
-    /// This is used to initialise the autosaves.
+    /// This is used to initialise the autosaves, timers and alarms.
     ///
     /// The autosaves are handled in a way where the engine autosaves when it receives an autosave
     /// signal. After completing the save, it sends itself another autosave signal on a timer. This
     /// function provides an initial timer for an autosave signal and should therefore only be
-    /// called once.
+    /// called once. This method will also restart all timers and alarms that may have been running
+    /// before the last shutdown.
     pub fn setup(&mut self) -> InternEngineResponsePackage {
+        let mut requests = Vec::new();
+        // get requests from team grace periods and games
+        for session in self.sessions.get_all() {
+            requests.append(&mut session.contents.setup())
+        }
+        // set the timer_tracker id
+        self.timer_tracker.current_id = requests
+            .iter()
+            .max_by(|&r1, &r2| r1.id().cmp(&r2.id()))
+            .map(|r| r.id())
+            .unwrap_or(0);
+        // create the autosave timer
+        requests.push(
+            self.timer_tracker
+                .timer(chrono::TimeDelta::seconds(2), InternEngineCommand::AutoSave)
+                .0,
+        );
         InternEngineResponsePackage {
             response: InternEngineResponse::DirectResponse(ResponseAction::Success.into()),
-            runtime_requests: Some(vec![RuntimeRequest::CreateTimer {
-                duration: tokio::time::Duration::from_secs(2),
-                payload: InternEngineCommand::AutoSave,
-                id: 0,
-            }]),
+            runtime_requests: Some(requests),
         }
     }
 

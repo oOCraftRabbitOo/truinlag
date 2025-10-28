@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{runtime::RuntimeRequest, InternEngineCommand, SessionContext, TimerHook};
 
 use super::{
@@ -17,6 +19,8 @@ pub struct TeamEntry {
     #[serde(default)]
     pub picture: Option<u64>,
     pub players: Vec<u64>,
+    #[serde(default)]
+    pub player_location_counts: HashMap<u64, (u32, u32)>,
     pub discord_channel: Option<u64>,
     pub role: TeamRole,
     pub colour: Colour,
@@ -105,6 +109,7 @@ impl TeamEntry {
             name,
             picture: None,
             players,
+            player_location_counts: HashMap::new(),
             discord_channel,
             colour,
             challenges: Vec::with_capacity(config.num_challenges as usize),
@@ -178,29 +183,43 @@ impl TeamEntry {
         location: DetailedLocation,
         by_player: u64,
     ) -> Option<DetailedLocation> {
+        match self.player_location_counts.get(&by_player) {
+            None => self.player_location_counts.insert(by_player, (1, 0)),
+            Some(prev) => self
+                .player_location_counts
+                .insert(by_player, (prev.0 + 1, prev.1)),
+        };
         match self.current_location.clone() {
             None => Some(self.definitely_add_location(location, by_player)),
             Some(old_location) => {
-                match self.location_sending_player {
-                    None => {
-                        self.location_sending_player = Some(by_player);
-                        return Some(self.definitely_add_location(location, by_player));
-                    }
-                    Some(player) => {
-                        if by_player == player {
-                            return Some(self.definitely_add_location(location, by_player));
-                        }
-                    }
-                }
+                //// Was not very effective in practice
+                // match self.location_sending_player {
+                //     None => {
+                //         self.location_sending_player = Some(by_player);
+                //         return Some(self.definitely_add_location(location, by_player));
+                //     }
+                //     Some(player) => {
+                //         if by_player == player {
+                //             return Some(self.definitely_add_location(location, by_player));
+                //         }
+                //     }
+                // }
 
                 let time_since_last_location = location.timestamp - old_location.timestamp;
-                if time_since_last_location > 10 {
-                    self.location_sending_player = Some(by_player);
-                    return Some(self.definitely_add_location(location, by_player));
-                }
 
-                if old_location.accuracy / location.accuracy > 1 {
+                if location.accuracy < 20
+                    || (location.accuracy as f32 / old_location.accuracy as f32) < 1.0
+                    || (time_since_last_location > 15
+                        && (location.accuracy as f32 / old_location.accuracy as f32) < 1.5)
+                    || time_since_last_location > 30
+                {
                     self.location_sending_player = Some(by_player);
+                    let prev = self
+                        .player_location_counts
+                        .get(&by_player)
+                        .expect("shouldn't fail dict lookup, the player was set a few lines above");
+                    self.player_location_counts
+                        .insert(by_player, (prev.0, prev.1 + 1));
                     return Some(self.definitely_add_location(location, by_player));
                 }
 

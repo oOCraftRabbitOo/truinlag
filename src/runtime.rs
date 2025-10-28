@@ -46,6 +46,27 @@ pub enum RuntimeRequest {
     CancelTimer(u64),
 }
 
+impl RuntimeRequest {
+    /// Method used to extract the timer id associated with the request. If the request has no
+    /// associated id, the return value is meaningless.
+    pub fn id(&self) -> u64 {
+        match self {
+            RuntimeRequest::CreateTimer {
+                duration: _,
+                payload: _,
+                id,
+            } => *id,
+            RuntimeRequest::CreateAlarm {
+                time: _,
+                payload: _,
+                id,
+            } => *id,
+            RuntimeRequest::RawLoopback(_) => 0,
+            RuntimeRequest::CancelTimer(id) => *id,
+        }
+    }
+}
+
 pub struct InternEngineResponsePackage {
     pub response: InternEngineResponse,
     pub runtime_requests: Option<Vec<RuntimeRequest>>,

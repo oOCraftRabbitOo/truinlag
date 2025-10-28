@@ -61,6 +61,8 @@ impl TimerHook {
     }
 
     /// Returns a `RuntimeRequest` that starts the timer.
+    ///
+    /// If an id is provided, it will overwrite the `TimerHook`'s current id.
     fn create_request(&self) -> RuntimeRequest {
         RuntimeRequest::CreateAlarm {
             time: self.end_time,
@@ -120,6 +122,12 @@ impl TimerTracker {
     ) -> (RuntimeRequest, TimerHook) {
         let time = chrono::Local::now() + duration;
         self.alarm(time, payload)
+    }
+
+    /// Returns an id that can be used to create a timer manually.
+    fn next_id(&mut self) -> u64 {
+        self.current_id = self.current_id.wrapping_add(1);
+        self.current_id
     }
 }
 
