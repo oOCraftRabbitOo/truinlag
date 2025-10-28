@@ -194,7 +194,9 @@ pub async fn connect(address: Option<&str>) -> Result<(SendConnection, InactiveR
     insert_connection(socket_read, socket_write).await
 }
 
-/// Allows converting some existing connection into a truinlag connection.
+/// Allows converting some existing connection into a truinlag connection. This is useful for
+/// creating a relay that allows connecting to truinlag through another type of connection, eg.
+/// TCP.
 pub async fn insert_connection<R, W>(
     read: R,
     write: W,
