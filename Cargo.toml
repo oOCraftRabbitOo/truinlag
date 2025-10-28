@@ -1,7 +1,7 @@
 [package]
 name = "truinlag"
 description = "a library and the engine for the trainlag game rust rewrite which will never be completed"
-version = "0.0.0"
+version = "0.0.2"
 edition = "2021"
 authors = ["Nelio Zoller"]
 
