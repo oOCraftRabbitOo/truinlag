@@ -7,6 +7,7 @@ use crate::{
     Config, EngineContext, InGame, PartialConfig, PastGame, PictureEntry, SessionContext,
 };
 use bonsaidb::core::schema::Collection;
+use chrono::Timelike;
 use geo::Distance;
 use partially::Partial;
 use rand::{rng, seq::IteratorRandom};
@@ -368,8 +369,10 @@ impl Session {
                         .periods
                         .last()
                         .map(|p| {
-                            chrono::Local::now().time() - p.end_time
-                                <= chrono::TimeDelta::seconds(30)
+                            chrono::Local::now()
+                                .num_seconds_from_midnight()
+                                .abs_diff(p.end_time.num_seconds_from_midnight())
+                                <= 30
                         })
                         .unwrap_or(false)
                     {
