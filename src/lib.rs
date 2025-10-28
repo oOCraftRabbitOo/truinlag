@@ -447,12 +447,14 @@ pub enum Event {
         bounty: u64,
         time: chrono::NaiveTime,
         picture_ids: Vec<u64>,
+        location: MinimalLocation,
     },
     Complete {
         challenge: Challenge,
         completer_id: usize,
         time: chrono::NaiveTime,
         picture_ids: Vec<u64>,
+        location: MinimalLocation,
     },
 }
 
@@ -465,12 +467,14 @@ impl PartialEq for Event {
                 bounty: _,
                 picture_ids: _,
                 time,
+                location: _,
             } => time,
             Event::Complete {
                 challenge: _,
                 completer_id: _,
                 picture_ids: _,
                 time,
+                location: _,
             } => time,
         };
         let other_time = match other {
@@ -480,12 +484,14 @@ impl PartialEq for Event {
                 bounty: _,
                 picture_ids: _,
                 time,
+                location: _,
             } => time,
             Event::Complete {
                 challenge: _,
                 completer_id: _,
                 picture_ids: _,
                 time,
+                location: _,
             } => time,
         };
         my_time.eq(other_time)
@@ -509,12 +515,14 @@ impl Ord for Event {
                 bounty: _,
                 picture_ids: _,
                 time,
+                location: _,
             } => time,
             Event::Complete {
                 challenge: _,
                 completer_id: _,
                 picture_ids: _,
                 time,
+                location: _,
             } => time,
         };
         let other_time = match other {
@@ -524,12 +532,14 @@ impl Ord for Event {
                 bounty: _,
                 picture_ids: _,
                 time,
+                location: _,
             } => time,
             Event::Complete {
                 challenge: _,
                 completer_id: _,
                 picture_ids: _,
                 time,
+                location: _,
             } => time,
         };
         my_time.cmp(other_time)

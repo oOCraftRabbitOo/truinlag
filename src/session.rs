@@ -593,46 +593,54 @@ impl Session {
     fn gather_events(&self) -> Vec<Event> {
         let mut events = Vec::new();
         for (team_id, team) in self.teams.iter().enumerate() {
-            events.extend(
-                team.periods
-                    .iter()
-                    .filter_map(|period| match &period.context {
-                        PeriodContext::CompletedChallenge {
-                            title,
-                            description,
-                            zone: _,
-                            points,
-                            id: _,
-                        } => Some(Event::Complete {
-                            challenge: Challenge {
-                                title: title.clone(),
-                                description: description.clone(),
-                                points: *points,
-                            },
-                            completer_id: team_id,
-                            picture_ids: period.pictures.clone(),
-                            time: period.end_time,
-                        }),
-                        PeriodContext::Catcher {
-                            caught_team,
-                            bounty,
-                        } => Some(Event::Catch {
-                            catcher_id: team_id,
-                            caught_id: *caught_team,
-                            bounty: *bounty,
-                            picture_ids: period.pictures.clone(),
-                            time: period.end_time,
-                        }),
-                        PeriodContext::Trophy {
-                            trophies: _,
-                            points_spent: _,
-                        }
-                        | PeriodContext::Caught {
-                            catcher_team: _,
-                            bounty: _,
-                        } => None,
+            events.extend(team.periods.iter().filter_map(|period| {
+                match &period.context {
+                    PeriodContext::CompletedChallenge {
+                        title,
+                        description,
+                        zone: _,
+                        points,
+                        id: _,
+                    } => Some(Event::Complete {
+                        challenge: Challenge {
+                            title: title.clone(),
+                            description: description.clone(),
+                            points: *points,
+                        },
+                        completer_id: team_id,
+                        picture_ids: period.pictures.clone(),
+                        time: period.end_time,
+                        location: team
+                            .locations
+                            .get(period.location_end_index)
+                            .unwrap()
+                            .clone(),
                     }),
-            );
+                    PeriodContext::Catcher {
+                        caught_team,
+                        bounty,
+                    } => Some(Event::Catch {
+                        catcher_id: team_id,
+                        caught_id: *caught_team,
+                        bounty: *bounty,
+                        picture_ids: period.pictures.clone(),
+                        time: period.end_time,
+                        location: team
+                            .locations
+                            .get(period.location_end_index)
+                            .unwrap()
+                            .clone(),
+                    }),
+                    PeriodContext::Trophy {
+                        trophies: _,
+                        points_spent: _,
+                    }
+                    | PeriodContext::Caught {
+                        catcher_team: _,
+                        bounty: _,
+                    } => None,
+                }
+            }));
         }
         events.sort();
         events
