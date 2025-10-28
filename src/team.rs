@@ -284,6 +284,7 @@ impl TeamEntry {
     pub fn start_catcher(&mut self, context: &SessionContext) -> Result<(), commands::Error> {
         self.reset(context)?;
         self.role = TeamRole::Catcher;
+        self.points = context.config.bounty_start_points;
         Ok(())
     }
 
