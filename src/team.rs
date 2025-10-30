@@ -183,12 +183,13 @@ impl TeamEntry {
         location: DetailedLocation,
         by_player: u64,
     ) -> Option<DetailedLocation> {
-        match self.player_location_counts.get(&by_player) {
-            None => self.player_location_counts.insert(by_player, (1, 0)),
-            Some(prev) => self
-                .player_location_counts
-                .insert(by_player, (prev.0 + 1, prev.1)),
-        };
+        let (total_count, accepted_count) = self
+            .player_location_counts
+            .get(&by_player)
+            .cloned()
+            .unwrap_or((0, 0));
+        self.player_location_counts
+            .insert(by_player, (total_count + 1, accepted_count));
         match self.current_location.clone() {
             None => Some(self.definitely_add_location(location, by_player)),
             Some(old_location) => {
@@ -214,12 +215,8 @@ impl TeamEntry {
                     || time_since_last_location > 30
                 {
                     self.location_sending_player = Some(by_player);
-                    let prev = self
-                        .player_location_counts
-                        .get(&by_player)
-                        .expect("shouldn't fail dict lookup, the player was set a few lines above");
                     self.player_location_counts
-                        .insert(by_player, (prev.0, prev.1 + 1));
+                        .insert(by_player, (total_count + 1, accepted_count + 1));
                     return Some(self.definitely_add_location(location, by_player));
                 }
 

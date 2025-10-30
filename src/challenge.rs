@@ -315,6 +315,9 @@ impl ChallengeEntry {
         if let Some(desc_override) = self.description.clone() {
             description = desc_override;
         }
+        if self.no_disembark {
+            title = format!("🛤️ {}", title);
+        }
         if let Some(z) = &zone {
             if matches!(self.kind, Zoneable) && zone_zoneables {
                 description.push_str(
