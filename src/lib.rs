@@ -9,7 +9,7 @@ pub mod commands;
 type Timestamp = i64;
 
 #[derive(Partial, Debug, Clone, Serialize, Deserialize)]
-#[partially(derive(Debug, Clone, Serialize, Deserialize))]
+#[partially(derive(Debug, Clone, Serialize, Deserialize, Default))]
 pub struct GameConfig {
     pub num_catchers: u64,
     pub start_zone: u64,
