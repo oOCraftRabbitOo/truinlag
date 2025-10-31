@@ -123,12 +123,6 @@ impl TimerTracker {
         let time = chrono::Local::now() + duration;
         self.alarm(time, payload)
     }
-
-    /// Returns an id that can be used to create a timer manually.
-    fn next_id(&mut self) -> u64 {
-        self.current_id = self.current_id.wrapping_add(1);
-        self.current_id
-    }
 }
 
 /// A grouping of references to data contained within the engine. Its primary purpose is to make
@@ -271,7 +265,7 @@ where
     }
 
     /// Gets the item with the requested id from the db. Returns `None` if the item doesn't exist.
-    fn get(&self, id: u64) -> Option<DBEntry<T>> {
+    fn get(&self, id: u64) -> Option<DBEntry<'_, T>> {
         match self.entries.get(id as usize) {
             // could be optimised with binary search?
             Some(Some((contents, status))) => match status {
@@ -284,7 +278,7 @@ where
     }
 
     /// Mutably gets the item with the requested id from the db. Returns `None` if the item doesn't exist.
-    fn get_mut(&mut self, id: u64) -> Option<MutDBEntry<T>> {
+    fn get_mut(&mut self, id: u64) -> Option<MutDBEntry<'_, T>> {
         match self.entries.get_mut(id as usize) {
             Some(Some((contents, status))) => match status {
                 DBStatus::Unchanged | DBStatus::Edited => {
@@ -307,7 +301,7 @@ where
     }
 
     /// Searches for an entry in the collection that satisfies a predicate.
-    fn find(&self, mut predicate: impl FnMut(&T) -> bool) -> Option<DBEntry<T>> {
+    fn find(&self, mut predicate: impl FnMut(&T) -> bool) -> Option<DBEntry<'_, T>> {
         self.entries
             .iter()
             .enumerate()
@@ -325,7 +319,7 @@ where
     }
 
     /// Searches for an entry in the collection that satisfies a predicate. (mutably)
-    fn find_mut(&mut self, mut predicate: impl FnMut(&T) -> bool) -> Option<MutDBEntry<T>> {
+    fn find_mut(&mut self, mut predicate: impl FnMut(&T) -> bool) -> Option<MutDBEntry<'_, T>> {
         match self
             .entries
             .iter_mut()
@@ -347,7 +341,7 @@ where
     }
 
     /// Gets all entries from the collection in a `Vec`.
-    fn get_all(&self) -> Vec<DBEntry<T>> {
+    fn get_all(&self) -> Vec<DBEntry<'_, T>> {
         self.entries
             .iter()
             .enumerate()
@@ -628,7 +622,7 @@ pub struct Config {
     /// Whenever a team completes a challenge, their bounty should increase, so that they become a
     /// more attractive target. That amount should be some fraction of the points they earn from
     /// completing the challenge.
-    /// *Recommended Value:* **30**
+    /// *Recommended Value:* **0.3**
     pub bounty_percentage: f64,
 
     // Times
@@ -718,7 +712,7 @@ impl Default for Config {
             grace_period_duration: chrono::TimeDelta::minutes(15),
             bounty_base_points: 0,
             bounty_start_points: 500,
-            bounty_percentage: 0.25,
+            bounty_percentage: 0.3,
             start_time: chrono::NaiveTime::from_hms_opt(9, 0, 0)
                 .expect("This is hardcoded and should never fail"),
             end_time: chrono::NaiveTime::from_hms_opt(17, 0, 0)
@@ -778,6 +772,31 @@ impl Default for Config {
                     b: 192,
                 },
             ],
+        }
+    }
+}
+
+impl From<Config> for GameConfig {
+    fn from(value: Config) -> Self {
+        Self {
+            num_catchers: value.num_catchers,
+            start_zone: value.start_zone,
+            start_time: value.start_time,
+            end_time: value.end_time,
+            challenge_sets: value.challenge_sets,
+        }
+    }
+}
+
+impl From<PartialGameConfig> for PartialConfig {
+    fn from(value: PartialGameConfig) -> Self {
+        Self {
+            num_catchers: value.num_catchers,
+            start_zone: value.start_zone,
+            start_time: value.start_time,
+            end_time: value.end_time,
+            challenge_sets: value.challenge_sets,
+            ..Default::default()
         }
     }
 }

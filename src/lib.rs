@@ -1,4 +1,5 @@
 use image::{DynamicImage, ImageFormat};
+use partially::Partial;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -6,6 +7,16 @@ pub mod api;
 pub mod commands;
 
 type Timestamp = i64;
+
+#[derive(Partial, Debug, Clone, Serialize, Deserialize)]
+#[partially(derive(Debug, Clone, Serialize, Deserialize))]
+pub struct GameConfig {
+    pub num_catchers: u64,
+    pub start_zone: u64,
+    pub start_time: chrono::NaiveTime,
+    pub end_time: chrono::NaiveTime,
+    pub challenge_sets: Vec<u64>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetailedLocation {

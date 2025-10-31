@@ -147,6 +147,8 @@ pub enum EngineAction {
         team_id: usize,
         of_past_seconds: Option<NonZeroU32>,
     },
+    GetGameConfig,
+    SetGameConfig(PartialGameConfig),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -176,6 +178,7 @@ pub enum ResponseAction {
         team_id: usize,
         locations: Vec<MinimalLocation>,
     },
+    SendGameConfig(GameConfig),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
