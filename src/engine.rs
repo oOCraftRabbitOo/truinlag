@@ -915,6 +915,8 @@ impl Engine {
                 team_id: _,
                 of_past_seconds: _,
             } => Error(NoSessionSupplied).into(),
+            GetGameConfig => Error(NoSessionSupplied).into(),
+            SetGameConfig(_) => Error(NoSessionSupplied).into(),
         }
     }
 }

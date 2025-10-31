@@ -760,6 +760,15 @@ impl Session {
         .into()
     }
 
+    fn send_game_config(&self) -> InternEngineResponsePackage {
+        SendGameConfig(self.config().into()).into()
+    }
+
+    fn set_game_config(&mut self, new_config: PartialGameConfig) -> InternEngineResponsePackage {
+        self.config().apply_some(new_config.into());
+        Success.into()
+    }
+
     /// The core method of the session that processes commands with sessions.
     ///
     /// The method takes a command to process, as well as a session id. This should be the id of
@@ -774,6 +783,8 @@ impl Session {
     ) -> InternEngineResponsePackage {
         let mut context = self.context(context, session_id);
         match command {
+            SetGameConfig(new_config) => self.set_game_config(new_config),
+            GetGameConfig => self.send_game_config(),
             GetPastLocations {
                 team_id,
                 of_past_seconds,
