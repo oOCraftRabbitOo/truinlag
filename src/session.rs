@@ -221,6 +221,13 @@ impl Session {
         player: u64,
         location: DetailedLocation,
     ) -> InternEngineResponsePackage {
+        if self.game.is_none() {
+            // locations should't be tracked if no game is running. A success response is returned
+            // anyways, since the trainlapp always shows all error responses as full-screen popups.
+            // That would be extremely obnoxious pre– and post-game. We should probably rework the
+            // app to stop sending locations at those times. Yeah, that'll be a TODO
+            return Success.into();
+        }
         match self
             .teams
             .iter_mut()
