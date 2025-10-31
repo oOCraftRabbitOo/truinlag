@@ -765,7 +765,7 @@ impl Session {
     }
 
     fn set_game_config(&mut self, new_config: PartialGameConfig) -> InternEngineResponsePackage {
-        self.config().apply_some(new_config.into());
+        self.config.apply_some(new_config.into());
         Success.into()
     }
 
