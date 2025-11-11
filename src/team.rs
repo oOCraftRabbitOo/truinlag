@@ -560,6 +560,7 @@ impl TeamEntry {
                         config.perim_distance_range.end,
                         ratio,
                     );
+                    println!("ratio: {}, max_perim: {}", ratio, max_perim);
                     let perim_near_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
                         (0..max_perim / 2).contains(&c.contents.distance(&centre_zone))
                             && specific_filter(c)
@@ -979,6 +980,7 @@ fn get_period(config: &Config) -> GenerationPeriod {
             let ratio = (zürich_time - now).num_minutes() as f64 / config.zkaff_minutes as f64;
             GenerationPeriod::ZKaff(ratio)
         } else if now >= perimeter_time {
+            println!("{}", (perimeter_time - now).num_minutes());
             let ratio =
                 (perimeter_time - now).num_minutes() as f64 / config.perimeter_minutes as f64;
             GenerationPeriod::Perimeter(ratio)
