@@ -738,20 +738,12 @@ impl Session {
         };
         let target_time =
             of_past_seconds.map(|secs| chrono::Local::now().timestamp() - secs.get() as i64);
-        println!(
-            "now: {}\n target: {}",
-            chrono::Local::now().timestamp(),
-            target_time.unwrap_or(0)
-        );
         SendPastLocations {
             team_id,
             locations: match target_time {
                 Some(secs) => team
                     .locations
-                    .split_at(team.locations.partition_point(|loc| {
-                        println!("{}", loc.timestamp);
-                        loc.timestamp < secs
-                    }))
+                    .split_at(team.locations.partition_point(|loc| loc.timestamp < secs))
                     .1
                     .to_vec(),
                 None => team.locations.clone(),

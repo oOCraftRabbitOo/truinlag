@@ -230,7 +230,6 @@ pub async fn manager() -> Result<()> {
 
             match stream {
                 Ok((stream, addr)) => {
-                    println!("Manager: accepted new connection: {:?}", addr);
                     make_io_task(stream, mpsc_tx_staller.clone(), io_tasks_2.clone(), addr)
                         .await
                         .unwrap_or_else(|err| {
@@ -489,7 +488,7 @@ async fn engine(
                 oneshot_sender
                     .send(broadcast_handle.new_receiver())
                     .unwrap_or_else(move |_handle| {
-                        println!("Engine: couldn't send broadcast handle")
+                        eprintln!("Engine: couldn't send broadcast handle")
                     });
             }
             EngineSignal::Shutdown => {
@@ -641,7 +640,7 @@ async fn io(
     }
 
     match wrapper(tx, rx, stream).await {
-        Ok(_) => println!("IO {:?}: terminated without error", addr),
+        Ok(_) => {}
         Err(err) => eprintln!("IO {:?}: {}", addr, err),
     }
 }

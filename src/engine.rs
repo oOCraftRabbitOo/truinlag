@@ -371,7 +371,6 @@ impl Engine {
                         response: Success.into(),
                         runtime_requests: Some(vec![RuntimeRequest::RawLoopback(tokio::spawn(
                             async move {
-                                println!("Engine Autosave: starting autosave");
                                 let now = tokio::time::Instant::now();
                                 let mut transaction = Transaction::new();
                                 vec_overwrite_in_transaction(player_changes, &mut transaction)
@@ -426,10 +425,7 @@ impl Engine {
                                 .unwrap();
 
                                 match transaction.apply_async(&db).await {
-                                    Ok(_) => println!(
-                                        "Engine Autosave: autosave succeeded in {} ms",
-                                        now.elapsed().as_millis(),
-                                    ),
+                                    Ok(_) => {}
                                     Err(err) => {
                                         eprintln!(
                                             "Engine Autosave: \
