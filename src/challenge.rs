@@ -32,7 +32,8 @@ impl ChallengeSetEntry {
     }
 }
 
-/// The representation of a raw challenge inside the db
+/// The representation of a raw challenge inside the db. Conforms roughly to the challenge data
+/// layout presented in UC4
 #[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "challenge", views = [UnspecificChallengeEntries, SpecificChallengeEntries, GoodChallengeEntries])]
 pub struct ChallengeEntry {
@@ -41,7 +42,10 @@ pub struct ChallengeEntry {
     pub status: ChallengeStatus,
     pub title: Option<String>,
     pub description: Option<String>,
+    /// Information about whether the challenge location is randomised during challenge generation
     pub random_place: Option<RandomPlaceType>,
+    /// Applicable to challenges of types `Kaff` and `ZKaff`. The name of the transit station the
+    /// challenge corresponds to.
     pub place: Option<String>,
     pub comment: String,
     pub kaffskala: Option<u8>,
@@ -76,7 +80,8 @@ impl ChallengeEntry {
         }
     }
 
-    /// Selects the zone from the challenge's zones that is the closest from a provided zone
+    /// Selects the zone from the challenge's zones that is the closest from a provided zone and
+    /// returns its id.
     pub fn closest_zone(&self, from: &DBEntry<ZoneEntry>) -> Option<u64> {
         self.zone
             .iter()

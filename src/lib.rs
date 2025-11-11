@@ -407,7 +407,6 @@ pub struct Team {
     pub players: Vec<Player>,
     pub challenges: Vec<Challenge>,
     pub completed_challenges: Vec<CompletedChallenge>,
-    // pub thumb_name: String,
     pub location: Option<DetailedLocation>,
     pub in_grace_period: bool,
 }

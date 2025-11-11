@@ -875,12 +875,21 @@ impl PlayerEntry {
 #[derive(Debug, Clone, Collection, Serialize, Deserialize)]
 #[collection(name = "zone")]
 pub struct ZoneEntry {
+    /// The zone number, i.e. `110`
     pub zone: u64,
     pub num_conn_zones: u64,
     pub num_connections: u64,
+    /// Whether a train passes through the zone, i.e. whether you can get from one ZVV zone to
+    /// another ZVV zone through this one by train.
     pub train_through: bool,
+    /// This is true for a few zones that are especially annoying to reach. Generally is set if the
+    /// zone has no trains.
     pub mongus: bool,
+    /// Is set for zones that contain the terminal stop of a line which has its other terminal stop
+    /// within the ZVV and runs completely within the ZVV. Used for a challenge.
     pub s_bahn_zone: bool,
+    /// Travel duration to every other zone. Key is the target zone id and value is the time in
+    /// minutes required to travel there.
     pub minutes_to: HashMap<u64, u64>,
 }
 
