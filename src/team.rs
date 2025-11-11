@@ -601,7 +601,7 @@ impl TeamEntry {
 
                 if config.num_challenges == 3 {
                     // generating perim challenges with max max_perim
-                    let max_perim = config.perim_distance_range.end;
+                    let max_perim = config.perim_distance_range.start;
                     let perim_near_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
                         (0..max_perim / 2).contains(&c.contents.distance(&centre_zone))
                             && specific_filter(c)
