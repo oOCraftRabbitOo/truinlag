@@ -50,6 +50,7 @@ pub struct ChallengeEntry {
     pub comment: String,
     pub kaffskala: Option<u8>,
     pub grade: Option<u8>,
+    /// The ids of the zones in which the challenge can be completed
     pub zone: Vec<u64>,
     pub bias_sat: f32,
     pub bias_sun: f32,
@@ -167,6 +168,7 @@ impl ChallengeEntry {
         zone_zoneables: bool,
         centre_zone: DBEntry<ZoneEntry>,
         current_zone: DBEntry<ZoneEntry>,
+        allowed_zones: Option<Vec<u64>>,
         id: u64,
         points_to_top: Option<u64>,
         context: &SessionContext,
@@ -191,11 +193,23 @@ impl ChallengeEntry {
             || (matches!(self.kind, Zoneable) && zone_zoneables);
         let zone = match self.random_place {
             Some(place_type) => match place_type {
-                RandomPlaceType::Zone => zone_db.get_all().choose(&mut rng()).cloned(),
+                RandomPlaceType::Zone => zone_db
+                    .get_all()
+                    .iter()
+                    .filter(|z| match &allowed_zones {
+                        None => true,
+                        Some(allowed) => allowed.contains(&z.id),
+                    })
+                    .choose(&mut rng())
+                    .cloned(),
                 RandomPlaceType::SBahnZone => zone_db
                     .get_all()
                     .iter()
                     .filter(|z| z.contents.s_bahn_zone)
+                    .filter(|z| match &allowed_zones {
+                        None => true,
+                        Some(allowed) => allowed.contains(&z.id),
+                    })
                     .choose(&mut rng())
                     .cloned(),
             },
@@ -217,7 +231,15 @@ impl ChallengeEntry {
                 ZKaff => Some(centre_zone.clone()),
                 Zoneable => {
                     if zone_zoneables {
-                        zone_db.get_all().choose(&mut rng()).cloned()
+                        zone_db
+                            .get_all()
+                            .iter()
+                            .filter(|z| match &allowed_zones {
+                                None => true,
+                                Some(allowed) => allowed.contains(&z.id),
+                            })
+                            .choose(&mut rng())
+                            .cloned()
                     } else {
                         None
                     }
@@ -249,8 +271,19 @@ impl ChallengeEntry {
         if let Some(z) = &zone {
             points += z.contents.zonic_kaffness(config) as i64;
             points += (config.travel_minutes_multiplier
-                * (self.distance(&current_zone) as f32).powf(config.travel_minutes_exponent))
-                as i64;
+                * (*current_zone
+                    .contents
+                    .minutes_to
+                    .get(&z.id)
+                    .unwrap_or_else(|| {
+                        eprintln!(
+                            "Engine: Zone {} has no distance to zone {}, \
+                            skipping distance calculation",
+                            current_zone.id, z.id
+                        );
+                        &0
+                    }) as f32)
+                    .powf(config.travel_minutes_exponent)) as i64;
         }
         match self.kind {
             // zkaff points
@@ -289,7 +322,7 @@ impl ChallengeEntry {
             points += Normal::new(0_f64, points as f64 * config.relative_standard_deviation)
                 .expect("this cannot fail, since both μ and σ must have real values")
                 .sample(&mut rng())
-                .round() as i64
+                .round() as i64;
         }
 
         // generating title and description. These may be automatically generated based on the

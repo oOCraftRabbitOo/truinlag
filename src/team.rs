@@ -317,6 +317,29 @@ impl TeamEntry {
         // challenge generation process is completely different from period to period, so the match
         // expression actually makes up almost the entire function body.
 
+        /// Generation Context
+        ///
+        /// is used locally to conveniently represent some info about how the challenge should be
+        /// generated.
+        struct GC {
+            pub zone_zoneables: bool,
+            pub allowed_zones: Option<Vec<u64>>,
+        }
+
+        impl GC {
+            pub fn new(zone_zoneables: bool) -> Self {
+                GC {
+                    zone_zoneables,
+                    allowed_zones: None,
+                }
+            }
+
+            pub fn allow_zones(mut self, allowed_zones: Vec<u64>) -> Self {
+                self.allowed_zones = Some(allowed_zones);
+                self
+            }
+        }
+
         let zone_entries = context.engine_context.zone_db;
         let config = &context.config;
         let raw_challenges = context.engine_context.challenge_db.get_all();
@@ -428,8 +451,8 @@ impl TeamEntry {
         };
 
         let challenge_or =
-            |chosen_challenges: [Option<&DBEntry<ChallengeEntry>>; 3]| -> Vec<InOpenChallenge> {
-                if chosen_challenges.iter().any(|c| c.is_none()) {
+            |chosen_challenges: &[(Option<&DBEntry<ChallengeEntry>>, GC)]| -> Vec<InOpenChallenge> {
+                if chosen_challenges.iter().any(|(c, _)| c.is_none()) {
                     eprintln!(
                         "not enough challenges for challenge generation, \
                             using fallback instead"
@@ -438,31 +461,17 @@ impl TeamEntry {
                 } else {
                     chosen_challenges
                         .iter()
-                        .enumerate()
-                        .map(|(index, c)| {
+                        .map(|(c, gc)| {
                             let c = c.expect("I just checked that all elements are Some");
-                            // this is a bit of a hack, but the last challenge is always the one
-                            // that shouldn't be zoned. It's okay since this closure only works
-                            // with three challenges anyways.
-                            if index == 2 {
-                                c.contents.challenge(
-                                    false,
-                                    centre_zone.clone(),
-                                    team_zone.clone(),
-                                    c.id,
-                                    points_to_top,
-                                    context,
-                                )
-                            } else {
-                                c.contents.challenge(
-                                    true,
-                                    centre_zone.clone(),
-                                    team_zone.clone(),
-                                    c.id,
-                                    points_to_top,
-                                    context,
-                                )
-                            }
+                            c.contents.challenge(
+                                gc.zone_zoneables,
+                                centre_zone.clone(),
+                                team_zone.clone(),
+                                gc.allowed_zones.clone(),
+                                c.id,
+                                points_to_top,
+                                context,
+                            )
                         })
                         .collect()
                 }
@@ -473,22 +482,14 @@ impl TeamEntry {
                 // The specific period challenge generation is used at the very start of the game
                 // and it is the most simple. Three challenges are generated and they must all be
                 // specific.
-                filtered_raw_challenges
+                let selected: Vec<_> = filtered_raw_challenges
                     .iter()
                     .filter(specific_filter)
                     .choose_multiple(&mut rng(), config.num_challenges as usize)
-                    .iter()
-                    .map(|c| {
-                        c.contents.challenge(
-                            true,
-                            centre_zone.clone(),
-                            team_zone.clone(),
-                            c.id,
-                            points_to_top,
-                            context,
-                        )
-                    })
-                    .collect()
+                    .into_iter()
+                    .map(|c| (Some(c), GC::new(true)))
+                    .collect();
+                challenge_or(&selected)
             }
             GenerationPeriod::Normal => {
                 // Normal period challenge generation generates three different kinds of
@@ -508,29 +509,42 @@ impl TeamEntry {
                         other => other,
                     };
                     let chosen_challenges = [
-                        if rng().random_bool(regio_probability) {
-                            filtered_raw_challenges
-                                .iter()
-                                .filter(regio_filter)
-                                .choose(&mut rng())
-                        } else {
+                        (
+                            if rng().random_bool(regio_probability) {
+                                filtered_raw_challenges
+                                    .iter()
+                                    .filter(regio_filter)
+                                    .choose(&mut rng())
+                            } else {
+                                filtered_raw_challenges
+                                    .iter()
+                                    .filter(specific_filter)
+                                    .filter(near_filter)
+                                    .choose(&mut rng())
+                            },
+                            GC::new(true).allow_zones(team_zone.contents.zones_with_distance(
+                                config.normal_period_near_distance_range.clone(),
+                            )),
+                        ),
+                        (
                             filtered_raw_challenges
                                 .iter()
                                 .filter(specific_filter)
-                                .filter(near_filter)
-                                .choose(&mut rng())
-                        },
-                        filtered_raw_challenges
-                            .iter()
-                            .filter(specific_filter)
-                            .filter(far_filter)
-                            .choose(&mut rng()),
-                        filtered_raw_challenges
-                            .iter()
-                            .filter(unspecific_filter)
-                            .choose(&mut rng()),
+                                .filter(far_filter)
+                                .choose(&mut rng()),
+                            GC::new(true).allow_zones(team_zone.contents.zones_with_distance(
+                                config.normal_period_far_distance_range.clone(),
+                            )),
+                        ),
+                        (
+                            filtered_raw_challenges
+                                .iter()
+                                .filter(unspecific_filter)
+                                .choose(&mut rng()),
+                            GC::new(false),
+                        ),
                     ];
-                    challenge_or(chosen_challenges)
+                    challenge_or(&chosen_challenges)
                 } else {
                     fallback_challenges
                 }
@@ -560,32 +574,43 @@ impl TeamEntry {
                         config.perim_distance_range.start,
                         ratio,
                     );
+                    let perim_near_zones =
+                        centre_zone.contents.zones_with_distance(0..max_perim / 2);
                     let perim_near_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-                        (0..max_perim / 2).contains(&c.contents.distance(&centre_zone))
-                            && specific_filter(c)
-                            && max_kaff_filter(c)
+                        c.contents.zone.iter().any(|z| perim_near_zones.contains(z))
                     };
+                    let perim_far_zones = centre_zone
+                        .contents
+                        .zones_with_distance(max_perim / 2..max_perim);
                     let perim_far_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-                        specific_filter(c)
-                            && max_kaff_filter(c)
-                            && (max_perim / 2..max_perim)
-                                .contains(&c.contents.distance(&centre_zone))
+                        c.contents.zone.iter().any(|z| perim_far_zones.contains(z))
                     };
                     let chosen_challenges = [
-                        filtered_raw_challenges
-                            .iter()
-                            .filter(perim_far_filter)
-                            .choose(&mut rng()),
-                        filtered_raw_challenges
-                            .iter()
-                            .filter(perim_near_filter)
-                            .choose(&mut rng()),
-                        filtered_raw_challenges
-                            .iter()
-                            .filter(unspecific_filter)
-                            .choose(&mut rng()),
+                        (
+                            filtered_raw_challenges
+                                .iter()
+                                .filter(specific_filter)
+                                .filter(perim_far_filter)
+                                .choose(&mut rng()),
+                            GC::new(true).allow_zones(perim_far_zones),
+                        ),
+                        (
+                            filtered_raw_challenges
+                                .iter()
+                                .filter(specific_filter)
+                                .filter(perim_near_filter)
+                                .choose(&mut rng()),
+                            GC::new(true).allow_zones(perim_near_zones),
+                        ),
+                        (
+                            filtered_raw_challenges
+                                .iter()
+                                .filter(unspecific_filter)
+                                .choose(&mut rng()),
+                            GC::new(false),
+                        ),
                     ];
-                    challenge_or(chosen_challenges)
+                    challenge_or(&chosen_challenges)
                 } else {
                     fallback_challenges
                 }
@@ -602,32 +627,41 @@ impl TeamEntry {
                 if config.num_challenges == 3 {
                     // generating perim challenges with max max_perim
                     let max_perim = config.perim_distance_range.start;
+                    let perim_near_zones =
+                        centre_zone.contents.zones_with_distance(0..max_perim / 2);
                     let perim_near_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-                        (0..max_perim / 2).contains(&c.contents.distance(&centre_zone))
-                            && specific_filter(c)
-                            && max_kaff_filter(c)
+                        c.contents.zone.iter().any(|z| perim_near_zones.contains(z))
                     };
+                    let perim_far_zones = centre_zone
+                        .contents
+                        .zones_with_distance(max_perim / 2..max_perim);
                     let perim_far_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-                        specific_filter(c)
-                            && max_kaff_filter(c)
-                            && (max_perim / 2..max_perim)
-                                .contains(&c.contents.distance(&centre_zone))
+                        c.contents.zone.iter().any(|z| perim_far_zones.contains(z))
                     };
                     let mut chosen_challenges = [
-                        filtered_raw_challenges
-                            .iter()
-                            .filter(specific_filter)
-                            .filter(perim_far_filter)
-                            .choose(&mut rng()),
-                        filtered_raw_challenges
-                            .iter()
-                            .filter(specific_filter)
-                            .filter(perim_near_filter)
-                            .choose(&mut rng()),
-                        filtered_raw_challenges
-                            .iter()
-                            .filter(unspecific_filter)
-                            .choose(&mut rng()),
+                        (
+                            filtered_raw_challenges
+                                .iter()
+                                .filter(specific_filter)
+                                .filter(perim_far_filter)
+                                .choose(&mut rng()),
+                            GC::new(true).allow_zones(perim_far_zones),
+                        ),
+                        (
+                            filtered_raw_challenges
+                                .iter()
+                                .filter(specific_filter)
+                                .filter(perim_near_filter)
+                                .choose(&mut rng()),
+                            GC::new(true).allow_zones(perim_near_zones),
+                        ),
+                        (
+                            filtered_raw_challenges
+                                .iter()
+                                .filter(unspecific_filter)
+                                .choose(&mut rng()),
+                            GC::new(false),
+                        ),
                     ];
                     // changing 2 challenges to zkaff
                     let ratio = (1.0 - ratio) * config.zkaff_ratio_range.start
@@ -639,7 +673,7 @@ impl TeamEntry {
                         _ => true,
                     };
                     if (ratio < 0.5 && pool) || (ratio >= 0.5 && !pool) {
-                        chosen_challenges[0] = filtered_raw_challenges
+                        chosen_challenges[0].0 = filtered_raw_challenges
                             .iter()
                             .filter(zkaff_filter)
                             .choose(&mut rng());
@@ -648,10 +682,10 @@ impl TeamEntry {
                             .iter()
                             .filter(zkaff_filter)
                             .choose_multiple(&mut rng(), 2);
-                        chosen_challenges[0] = kaff_challenges.first().cloned();
-                        chosen_challenges[1] = kaff_challenges.get(1).cloned();
+                        chosen_challenges[0].0 = kaff_challenges.first().cloned();
+                        chosen_challenges[1].0 = kaff_challenges.get(1).cloned();
                     }
-                    challenge_or(chosen_challenges)
+                    challenge_or(&chosen_challenges)
                 } else {
                     let mut chosen_challenges = filtered_raw_challenges
                         .iter()
@@ -675,6 +709,7 @@ impl TeamEntry {
                                     false,
                                     centre_zone.clone(),
                                     team_zone.clone(),
+                                    None,
                                     c.id,
                                     points_to_top,
                                     context,
@@ -706,6 +741,7 @@ impl TeamEntry {
                                 false,
                                 centre_zone.clone(),
                                 team_zone.clone(),
+                                None,
                                 c.id,
                                 points_to_top,
                                 context,
@@ -751,6 +787,7 @@ impl TeamEntry {
                     true,
                     centre_zone.clone(),
                     team_zone.clone(),
+                    None,
                     c.id,
                     points_to_top,
                     context,
@@ -929,6 +966,7 @@ fn smart_choose(
                 zone_zoneables,
                 centre_zone,
                 team_zone,
+                None,
                 selected.id,
                 points_to_top,
                 context,
@@ -939,6 +977,7 @@ fn smart_choose(
                 zone_zoneables,
                 centre_zone,
                 team_zone,
+                None,
                 selected.id,
                 points_to_top,
                 context,

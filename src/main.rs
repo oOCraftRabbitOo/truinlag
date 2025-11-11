@@ -16,7 +16,7 @@ use partially::Partial;
 use runtime::{manager, InternEngineCommand, RuntimeRequest};
 use serde::{Deserialize, Serialize};
 use session::Session;
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Range};
 use team::{PeriodContext, TeamEntry};
 use truinlag::{
     commands::{EngineAction, EngineCommand},
@@ -931,6 +931,13 @@ impl ZoneEntry {
             eprintln!("Engine: zonic kaffness for zone {} <= 0", self.zone);
             0
         }
+    }
+
+    pub fn zones_with_distance(&self, range: Range<u64>) -> Vec<u64> {
+        self.minutes_to
+            .iter()
+            .filter_map(|(to, t)| if range.contains(t) { Some(*to) } else { None })
+            .collect()
     }
 }
 
