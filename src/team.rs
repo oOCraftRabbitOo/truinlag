@@ -971,16 +971,16 @@ fn get_period(config: &Config) -> GenerationPeriod {
         ));
         now += wiggle;
         let end_game_time = config.end_time - Dur::minutes(config.end_game_minutes as i64);
-        let zurich_time = end_game_time - Dur::minutes(config.zkaff_minutes as i64);
-        let perimeter_time = zurich_time - Dur::minutes(config.perimeter_minutes as i64);
+        let zürich_time = end_game_time - Dur::minutes(config.zkaff_minutes as i64);
+        let perimeter_time = zürich_time - Dur::minutes(config.perimeter_minutes as i64);
         if now >= end_game_time {
             GenerationPeriod::EndGame
-        } else if now >= zurich_time {
-            let ratio = (now - zurich_time).num_minutes() as f64 / config.zkaff_minutes as f64;
+        } else if now >= zürich_time {
+            let ratio = (zürich_time - now).num_minutes() as f64 / config.zkaff_minutes as f64;
             GenerationPeriod::ZKaff(ratio)
         } else if now >= perimeter_time {
             let ratio =
-                (now - perimeter_time).num_minutes() as f64 / config.perimeter_minutes as f64;
+                (perimeter_time - now).num_minutes() as f64 / config.perimeter_minutes as f64;
             GenerationPeriod::Perimeter(ratio)
         } else {
             GenerationPeriod::Normal
