@@ -556,11 +556,10 @@ impl TeamEntry {
 
                 if config.num_challenges == 3 {
                     let max_perim = lerp(
-                        config.perim_distance_range.start,
                         config.perim_distance_range.end,
+                        config.perim_distance_range.start,
                         ratio,
                     );
-                    println!("ratio: {}, max_perim: {}", ratio, max_perim);
                     let perim_near_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
                         (0..max_perim / 2).contains(&c.contents.distance(&centre_zone))
                             && specific_filter(c)
@@ -977,12 +976,11 @@ fn get_period(config: &Config) -> GenerationPeriod {
         if now >= end_game_time {
             GenerationPeriod::EndGame
         } else if now >= zürich_time {
-            let ratio = (zürich_time - now).num_minutes() as f64 / config.zkaff_minutes as f64;
+            let ratio = (now - zürich_time).num_minutes() as f64 / config.zkaff_minutes as f64;
             GenerationPeriod::ZKaff(ratio)
         } else if now >= perimeter_time {
-            println!("{}", (perimeter_time - now).num_minutes());
             let ratio =
-                (perimeter_time - now).num_minutes() as f64 / config.perimeter_minutes as f64;
+                (now - perimeter_time).num_minutes() as f64 / config.perimeter_minutes as f64;
             GenerationPeriod::Perimeter(ratio)
         } else {
             GenerationPeriod::Normal
@@ -991,6 +989,6 @@ fn get_period(config: &Config) -> GenerationPeriod {
 }
 
 /// It lerps
-fn lerp(min: u64, max: u64, t: f64) -> u64 {
-    (min as f64 * (1_f64 - t) + max as f64) as u64
+fn lerp(a: u64, b: u64, t: f64) -> u64 {
+    (a as f64 + (b as f64 - a as f64) * t) as u64
 }
