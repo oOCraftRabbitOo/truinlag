@@ -93,13 +93,7 @@ impl ChallengeEntry {
                     false
                 }
             })
-            .min_by(|x, y| {
-                from.contents
-                    .minutes_to
-                    .get(x)
-                    .unwrap()
-                    .cmp(from.contents.minutes_to.get(y).unwrap())
-            })
+            .min_by_key(|z| from.contents.minutes_to.get(z).unwrap())
             .cloned()
     }
 
