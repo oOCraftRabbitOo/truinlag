@@ -131,6 +131,7 @@ impl TimerTracker {
 pub struct EngineContext<'a> {
     player_db: &'a DBMirror<PlayerEntry>,
     challenge_db: &'a DBMirror<ChallengeEntry>,
+    challenge_set_db: &'a DBMirror<ChallengeSetEntry>,
     zone_db: &'a DBMirror<ZoneEntry>,
     past_game_db: &'a mut DBMirror<PastGame>,
     picture_db: &'a mut DBMirror<PictureEntry>,
@@ -156,6 +157,20 @@ where
 {
     pub id: u64,
     pub contents: T,
+}
+
+impl<T> ClonedDBEntry<T>
+where
+    T: SerializedCollection<Contents = T, PrimaryKey = u64>,
+    T: Clone,
+{
+    /// Creates a `DBEntry` representation of the `ClonedDBEntry`
+    pub fn as_borrowed(&self) -> DBEntry<T> {
+        DBEntry {
+            id: self.id,
+            contents: &self.contents,
+        }
+    }
 }
 
 /// An entry in the database.
@@ -262,6 +277,11 @@ where
         }
 
         Self { entries }
+    }
+
+    /// Returns the amount of entries in the db
+    fn count(&self) -> usize {
+        self.entries.len()
     }
 
     /// Gets the item with the requested id from the db. Returns `None` if the item doesn't exist.
@@ -576,8 +596,8 @@ pub struct Config {
     /// the same as the one containing all the ZKaff challenges, so zone 110.
     /// *Recommended Value:* **110**
     pub centre_zone: u64,
-    /// The challenge sets the game should be played with. Depends on the challenge sets present in
-    /// the db, so check those before setting this value.
+    /// The ids of the challenge sets the game should be played with. Depends on the challenge sets
+    /// present in the db, so check those before setting this value.
     /// *Recommended Value:* **¯\\\_\(ツ\)\_/¯**
     pub challenge_sets: Vec<u64>,
     /// How many challenges gatherers should be able to choose from. The game design, as well as

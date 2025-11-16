@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use crate::{runtime::RuntimeRequest, InternEngineCommand, SessionContext, TimerHook};
 
 use super::{
     challenge::{ChallengeEntry, InOpenChallenge},
-    Config, DBEntry, ZoneEntry,
+    Config, DBEntry,
 };
 use chrono::{self, Duration as Dur};
 use geo::Distance;
@@ -317,25 +317,35 @@ impl TeamEntry {
         // challenge generation process is completely different from period to period, so the match
         // expression actually makes up almost the entire function body.
 
+        type Filter = Rc<dyn Fn(&DBEntry<'_, ChallengeEntry>) -> bool>;
+        type GenInfo = (Vec<Filter>, GC);
+
         /// Generation Context
         ///
         /// is used locally to conveniently represent some info about how the challenge should be
         /// generated.
         struct GC {
+            pub context: &'static str,
             pub zone_zoneables: bool,
             pub allowed_zones: Option<Vec<u64>>,
         }
 
         impl GC {
-            pub fn new(zone_zoneables: bool) -> Self {
+            pub fn new(context: &'static str) -> Self {
                 GC {
-                    zone_zoneables,
+                    context,
+                    zone_zoneables: true,
                     allowed_zones: None,
                 }
             }
 
             pub fn allow_zones(mut self, allowed_zones: Vec<u64>) -> Self {
                 self.allowed_zones = Some(allowed_zones);
+                self
+            }
+
+            pub fn dont_zone(mut self) -> Self {
+                self.zone_zoneables = false;
                 self
             }
         }
@@ -350,20 +360,22 @@ impl TeamEntry {
             .top_team_points
             .map(|p| p.saturating_sub(self.points));
 
-        let challenge_set_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-            config
-                .challenge_sets
-                .iter()
-                .any(|s| c.contents.sets.contains(s))
-        };
-        let approved_status_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
+        let challenge_sets = config.challenge_sets.clone();
+        let challenge_set_filter: Filter = Rc::new(move |c| -> bool {
+            challenge_sets.iter().any(|s| c.contents.sets.contains(s))
+        });
+
+        let approved_status_filter: Filter = Rc::new(|c| -> bool {
             matches!(
                 c.contents.status,
                 ChallengeStatus::Approved | ChallengeStatus::Refactor
             )
-        };
-        let not_completed_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-            self.periods
+        });
+
+        let periods = self.periods.clone();
+
+        let not_completed_filter: Filter = Rc::new(move |c| -> bool {
+            periods
                 .iter()
                 .filter_map(|p| match &p.context {
                     PeriodContext::CompletedChallenge {
@@ -376,120 +388,121 @@ impl TeamEntry {
                     _ => None,
                 })
                 .all(|i| *i != c.id)
-        };
-        let specific_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
+        });
+
+        let specific_filter: Filter = Rc::new(|c| -> bool {
             matches!(
                 c.contents.kind,
                 ChallengeType::Kaff | ChallengeType::Ortsspezifisch | ChallengeType::Zoneable
             )
-        };
-        let unspecific_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
+        });
+
+        let unspecific_filter: Filter = Rc::new(|c| -> bool {
             matches!(
                 c.contents.kind,
                 ChallengeType::Zoneable | ChallengeType::Unspezifisch
             )
-        };
-        let zkaff_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-            matches!(c.contents.kind, ChallengeType::ZKaff)
-        };
-        let max_kaff_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
+        });
+
+        let zkaff_filter: Filter =
+            Rc::new(|c| -> bool { matches!(c.contents.kind, ChallengeType::ZKaff) });
+
+        let perim_max_kaff = config.perim_max_kaff;
+        let max_kaff_filter: Filter = Rc::new(move |c| -> bool {
             c.contents.kaffskala.is_none()
                 || matches!(
                 c.contents.kaffskala,
-                Some(x) if x as u64 <= config.perim_max_kaff)
-        };
-        let regio_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-            matches!(c.contents.kind, ChallengeType::Regionsspezifisch)
-        };
-        let far_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-            config
-                .normal_period_far_distance_range
-                .contains(&c.contents.distance(&team_zone))
-        };
-        let near_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-            config
-                .normal_period_near_distance_range
-                .contains(&c.contents.distance(&team_zone))
-        };
+                Some(x) if x as u64 <= perim_max_kaff)
+        });
 
-        let mut filtered_raw_challenges: Vec<DBEntry<ChallengeEntry>> = raw_challenges
-            .iter()
-            .filter(approved_status_filter)
-            .filter(challenge_set_filter)
-            .filter(not_completed_filter)
-            .cloned()
-            .collect();
-        if filtered_raw_challenges.is_empty() {
-            filtered_raw_challenges = raw_challenges.to_vec();
-            eprintln!(
-                "Engine: there are no more challenges that can be generated \
-                for team {} with the currently selected challenge sets. \
-                using all challenges",
-                self.name
-            );
-        }
+        let regio_filter: Filter =
+            Rc::new(|c| -> bool { matches!(c.contents.kind, ChallengeType::Regionsspezifisch) });
 
-        let fallback_challenges = self.generate_fallback_challenges(
-            &filtered_raw_challenges,
-            team_zone.clone(),
-            team_zone.clone(),
-            points_to_top,
-            context,
-        );
+        let team_zone_2 = team_zone.clone_contents();
+        let dist_range = config.normal_period_far_distance_range.clone();
+        let far_filter: Filter = Rc::new(move |c| -> bool {
+            dist_range.contains(&c.contents.distance(&team_zone_2.as_borrowed()))
+        });
+
+        let team_zone_2 = team_zone.clone_contents();
+        let dist_range = config.normal_period_near_distance_range.clone();
+        let near_filter: Filter = Rc::new(move |c| -> bool {
+            dist_range.contains(&c.contents.distance(&team_zone_2.as_borrowed()))
+        });
 
         let centre_zone = match zone_entries.find(|z| z.zone == config.centre_zone) {
             Some(centre_zone) => centre_zone,
             None => {
                 eprintln!(
-                    "Engine: VERY BAD ERROR: \
+                    "Engine: EXTREMELY BAD ERROR: \
                     couldn't find centre zone during challenge selection, \
-                    generating fallback challenges instead"
+                    giving up"
                 );
-                self.challenges = fallback_challenges;
                 return;
             }
         };
 
-        let challenge_or =
-            |chosen_challenges: &[(Option<&DBEntry<ChallengeEntry>>, GC)]| -> Vec<InOpenChallenge> {
-                if chosen_challenges.iter().any(|(c, _)| c.is_none()) {
-                    eprintln!(
-                        "not enough challenges for challenge generation, \
-                            using fallback instead"
-                    );
-                    fallback_challenges.clone()
-                } else {
-                    chosen_challenges
-                        .iter()
-                        .map(|(c, gc)| {
-                            let c = c.expect("I just checked that all elements are Some");
-                            c.contents.challenge(
-                                gc.zone_zoneables,
-                                centre_zone.clone(),
-                                team_zone.clone(),
-                                gc.allowed_zones.clone(),
-                                c.id,
-                                points_to_top,
-                                context,
-                            )
-                        })
-                        .collect()
-                }
+        let select_challenge =
+            |filters: Vec<Filter>, already_in_filter: Filter, gc: GC| -> Option<InOpenChallenge> {
+                let combined_filter: Filter = Rc::new(move |c| filters.iter().all(|f| f(c)));
+                let filter_list_list: Vec<Vec<Filter>> = vec![
+                    vec![
+                        already_in_filter.clone(),
+                        approved_status_filter.clone(),
+                        challenge_set_filter.clone(),
+                        not_completed_filter.clone(),
+                        combined_filter.clone(),
+                    ],
+                    vec![
+                        approved_status_filter.clone(),
+                        combined_filter.clone(),
+                        already_in_filter.clone(),
+                    ],
+                    vec![approved_status_filter.clone()],
+                    vec![Rc::new(|_| true)],
+                ];
+                filter_list_list.into_iter().enumerate().fold(
+                    None,
+                    |prev: Option<InOpenChallenge>, (index, filter_list)| match prev {
+                        Some(c) => Some(c),
+                        None => {
+                            if index >= 1 {
+                                eprintln!(
+                                    "Engine: Failed to select {} \
+                                        challenge for team {}, \
+                                        trying with filter list {} instead",
+                                    gc.context, self.name, index
+                                )
+                            }
+                            raw_challenges
+                                .iter()
+                                .filter(|&c: &_| filter_list.iter().all(|f| f(c)))
+                                .collect::<Vec<_>>()
+                                .choose(&mut rng())
+                                .map(|c| {
+                                    c.contents.challenge(
+                                        gc.zone_zoneables,
+                                        centre_zone.clone(),
+                                        team_zone.clone(),
+                                        gc.allowed_zones.clone(),
+                                        c.id,
+                                        points_to_top,
+                                        context,
+                                    )
+                                })
+                        }
+                    },
+                )
             };
 
-        self.challenges = match get_period(config) {
+        let gen_infos: Vec<GenInfo> = match get_period(config) {
             GenerationPeriod::Specific => {
                 // The specific period challenge generation is used at the very start of the game
                 // and it is the most simple. Three challenges are generated and they must all be
                 // specific.
-                let selected: Vec<_> = filtered_raw_challenges
-                    .iter()
-                    .filter(specific_filter)
-                    .choose_multiple(&mut rng(), config.num_challenges as usize)
-                    .into_iter()
-                    .map(|c| (Some(c), GC::new(true)))
-                    .collect();
-                challenge_or(&selected)
+                (0..config.num_challenges)
+                    .map(|_| (vec![specific_filter.clone()], GC::new("specific")))
+                    .collect()
             }
             GenerationPeriod::Normal => {
                 // Normal period challenge generation generates three different kinds of
@@ -502,51 +515,44 @@ impl TeamEntry {
                 // should be a fallback for different challenge amounts. If more or fewer than 3
                 // challenges are requested, all challenges will be generated the same way as
                 // during the specific period save one which will be unspecific.
+
                 if config.num_challenges == 3 {
-                    let regio_probability = match config.regio_ratio {
+                    let is_regio = rng().random_bool(match config.regio_ratio {
                         ..=0.0 => 0.0,
                         1.0.. => 1.0,
                         other => other,
-                    };
-                    let chosen_challenges = [
+                    });
+                    vec![
+                        if is_regio {
+                            (vec![regio_filter], GC::new("regionspecific").dont_zone())
+                        } else {
+                            (
+                                vec![specific_filter.clone(), near_filter],
+                                GC::new("normal near").allow_zones(
+                                    team_zone.contents.zones_with_distance(
+                                        config.normal_period_near_distance_range.clone(),
+                                    ),
+                                ),
+                            )
+                        },
                         (
-                            if rng().random_bool(regio_probability) {
-                                filtered_raw_challenges
-                                    .iter()
-                                    .filter(regio_filter)
-                                    .choose(&mut rng())
-                            } else {
-                                filtered_raw_challenges
-                                    .iter()
-                                    .filter(specific_filter)
-                                    .filter(near_filter)
-                                    .choose(&mut rng())
-                            },
-                            GC::new(true).allow_zones(team_zone.contents.zones_with_distance(
-                                config.normal_period_near_distance_range.clone(),
-                            )),
+                            vec![specific_filter.clone(), far_filter],
+                            GC::new("normal far").allow_zones(
+                                team_zone.contents.zones_with_distance(
+                                    config.normal_period_far_distance_range.clone(),
+                                ),
+                            ),
                         ),
-                        (
-                            filtered_raw_challenges
-                                .iter()
-                                .filter(specific_filter)
-                                .filter(far_filter)
-                                .choose(&mut rng()),
-                            GC::new(true).allow_zones(team_zone.contents.zones_with_distance(
-                                config.normal_period_far_distance_range.clone(),
-                            )),
-                        ),
-                        (
-                            filtered_raw_challenges
-                                .iter()
-                                .filter(unspecific_filter)
-                                .choose(&mut rng()),
-                            GC::new(false),
-                        ),
-                    ];
-                    challenge_or(&chosen_challenges)
+                        (vec![unspecific_filter], GC::new("unspecific").dont_zone()),
+                    ]
                 } else {
-                    fallback_challenges
+                    (1..config.num_challenges)
+                        .map(|_| (vec![specific_filter.clone()], GC::new("specific")))
+                        .chain(vec![(
+                            vec![unspecific_filter],
+                            GC::new("unspecific").dont_zone(),
+                        )])
+                        .collect()
                 }
             }
             GenerationPeriod::Perimeter(ratio) => {
@@ -576,43 +582,46 @@ impl TeamEntry {
                     );
                     let perim_near_zones =
                         centre_zone.contents.zones_with_distance(0..max_perim / 2);
-                    let perim_near_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-                        c.contents.zone.iter().any(|z| perim_near_zones.contains(z))
-                    };
+                    let perim_near_zones_2 = perim_near_zones.clone();
+                    let perim_near_filter: Filter = Rc::new(move |c| -> bool {
+                        c.contents
+                            .zone
+                            .iter()
+                            .any(|z| perim_near_zones_2.contains(z))
+                    });
                     let perim_far_zones = centre_zone
                         .contents
                         .zones_with_distance(max_perim / 2..max_perim);
-                    let perim_far_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-                        c.contents.zone.iter().any(|z| perim_far_zones.contains(z))
-                    };
-                    let chosen_challenges = [
+                    let perim_far_zones_2 = perim_far_zones.clone();
+                    let perim_far_filter: Filter = Rc::new(move |c| -> bool {
+                        c.contents
+                            .zone
+                            .iter()
+                            .any(|z| perim_far_zones_2.contains(z))
+                    });
+                    vec![
                         (
-                            filtered_raw_challenges
-                                .iter()
-                                .filter(specific_filter)
-                                .filter(perim_far_filter)
-                                .choose(&mut rng()),
-                            GC::new(true).allow_zones(perim_far_zones),
+                            vec![
+                                specific_filter.clone(),
+                                perim_far_filter,
+                                max_kaff_filter.clone(),
+                            ],
+                            GC::new("perim far").allow_zones(perim_far_zones),
                         ),
                         (
-                            filtered_raw_challenges
-                                .iter()
-                                .filter(specific_filter)
-                                .filter(perim_near_filter)
-                                .choose(&mut rng()),
-                            GC::new(true).allow_zones(perim_near_zones),
+                            vec![perim_near_filter, specific_filter, max_kaff_filter],
+                            GC::new("perim near").allow_zones(perim_near_zones),
                         ),
-                        (
-                            filtered_raw_challenges
-                                .iter()
-                                .filter(unspecific_filter)
-                                .choose(&mut rng()),
-                            GC::new(false),
-                        ),
-                    ];
-                    challenge_or(&chosen_challenges)
+                        (vec![unspecific_filter], GC::new("unspecific").dont_zone()),
+                    ]
                 } else {
-                    fallback_challenges
+                    (1..config.num_challenges)
+                        .map(|_| (vec![specific_filter.clone()], GC::new("specific")))
+                        .chain(vec![(
+                            vec![unspecific_filter],
+                            GC::new("unspecific").dont_zone(),
+                        )])
+                        .collect()
                 }
             }
             GenerationPeriod::ZKaff(ratio) => {
@@ -629,191 +638,98 @@ impl TeamEntry {
                     let max_perim = config.perim_distance_range.start;
                     let perim_near_zones =
                         centre_zone.contents.zones_with_distance(0..max_perim / 2);
-                    let perim_near_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-                        c.contents.zone.iter().any(|z| perim_near_zones.contains(z))
-                    };
+                    let perim_near_zones_2 = perim_near_zones.clone();
+                    let perim_near_filter: Filter = Rc::new(move |c| -> bool {
+                        c.contents
+                            .zone
+                            .iter()
+                            .any(|z| perim_near_zones_2.contains(z))
+                    });
                     let perim_far_zones = centre_zone
                         .contents
                         .zones_with_distance(max_perim / 2..max_perim);
-                    let perim_far_filter = |c: &&DBEntry<ChallengeEntry>| -> bool {
-                        c.contents.zone.iter().any(|z| perim_far_zones.contains(z))
-                    };
-                    let mut chosen_challenges = [
-                        (
-                            filtered_raw_challenges
-                                .iter()
-                                .filter(specific_filter)
-                                .filter(perim_far_filter)
-                                .choose(&mut rng()),
-                            GC::new(true).allow_zones(perim_far_zones),
-                        ),
-                        (
-                            filtered_raw_challenges
-                                .iter()
-                                .filter(specific_filter)
-                                .filter(perim_near_filter)
-                                .choose(&mut rng()),
-                            GC::new(true).allow_zones(perim_near_zones),
-                        ),
-                        (
-                            filtered_raw_challenges
-                                .iter()
-                                .filter(unspecific_filter)
-                                .choose(&mut rng()),
-                            GC::new(false),
-                        ),
-                    ];
-                    // changing 2 challenges to zkaff
-                    let ratio = (1.0 - ratio) * config.zkaff_ratio_range.start
-                        + ratio * config.zkaff_ratio_range.end;
-                    let pool = match ratio {
-                        ..=0.0 => false,
-                        0.0..0.5 => rng().random_bool(ratio * 2.0),
-                        0.5..1.0 => rng().random_bool((ratio - 0.5) * 2.0),
-                        _ => true,
-                    };
-                    if (ratio < 0.5 && pool) || (ratio >= 0.5 && !pool) {
-                        chosen_challenges[0].0 = filtered_raw_challenges
+                    let perim_far_zones_2 = perim_far_zones.clone();
+                    let perim_far_filter: Filter = Rc::new(move |c| -> bool {
+                        c.contents
+                            .zone
                             .iter()
-                            .filter(zkaff_filter)
-                            .choose(&mut rng());
-                    } else if ratio >= 0.5 && pool {
-                        let kaff_challenges = filtered_raw_challenges
-                            .iter()
-                            .filter(zkaff_filter)
-                            .choose_multiple(&mut rng(), 2);
-                        chosen_challenges[0].0 = kaff_challenges.first().cloned();
-                        chosen_challenges[1].0 = kaff_challenges.get(1).cloned();
-                    }
-                    challenge_or(&chosen_challenges)
-                } else {
-                    let mut chosen_challenges = filtered_raw_challenges
-                        .iter()
-                        .filter(zkaff_filter)
-                        .choose_multiple(&mut rng(), config.num_challenges as usize - 1);
-                    if let Some(c) = filtered_raw_challenges
-                        .iter()
-                        .filter(unspecific_filter)
-                        .choose(&mut rng())
-                    {
-                        chosen_challenges.push(c);
-                    }
-                    if chosen_challenges.len() < config.num_challenges as usize {
-                        eprintln!("Not enough challenges for zkaff selection, using fallback");
-                        fallback_challenges
+                            .any(|z| perim_far_zones_2.contains(z))
+                    });
+                    let (first, second) = if ratio < 0.0 {
+                        (false, false)
+                    } else if ratio < 0.5 {
+                        (rng().random_bool(ratio * 2.0), false)
+                    } else if ratio < 1.0 {
+                        (true, rng().random_bool((ratio - 0.5) * 2.0))
                     } else {
-                        chosen_challenges
-                            .iter()
-                            .map(|c| {
-                                c.contents.challenge(
-                                    false,
-                                    centre_zone.clone(),
-                                    team_zone.clone(),
-                                    None,
-                                    c.id,
-                                    points_to_top,
-                                    context,
-                                )
-                            })
-                            .collect()
-                    }
+                        (true, true)
+                    };
+                    vec![
+                        if first {
+                            (vec![zkaff_filter.clone()], GC::new("zkaff"))
+                        } else {
+                            (
+                                vec![
+                                    specific_filter.clone(),
+                                    perim_far_filter,
+                                    max_kaff_filter.clone(),
+                                ],
+                                GC::new("perim far").allow_zones(perim_far_zones),
+                            )
+                        },
+                        if second {
+                            (vec![zkaff_filter], GC::new("zkaff"))
+                        } else {
+                            (
+                                vec![specific_filter, perim_near_filter, max_kaff_filter],
+                                GC::new("perim near").allow_zones(perim_near_zones),
+                            )
+                        },
+                        (vec![unspecific_filter], GC::new("unspecific").dont_zone()),
+                    ]
+                } else {
+                    (1..config.num_challenges)
+                        .map(|_| (vec![zkaff_filter.clone()], GC::new("zkaff")))
+                        .chain(vec![(
+                            vec![unspecific_filter],
+                            GC::new("unspecific").dont_zone(),
+                        )])
+                        .collect()
                 }
             }
             GenerationPeriod::EndGame => {
                 // End game challenge generation is relatively simple. 1 Challenge is ZKaff, the others are
                 // unspecific. No further restrictions apply.
-                let mut chosen_challenges = filtered_raw_challenges
-                    .iter()
-                    .filter(unspecific_filter)
-                    .choose_multiple(&mut rng(), config.num_challenges as usize - 1);
-                if let Some(c) = filtered_raw_challenges
-                    .iter()
-                    .filter(zkaff_filter)
-                    .choose(&mut rng())
-                {
-                    chosen_challenges.push(c);
-                }
-                if chosen_challenges.len() == config.num_challenges as usize {
-                    chosen_challenges
-                        .iter()
-                        .map(|c| {
-                            c.contents.challenge(
-                                false,
-                                centre_zone.clone(),
-                                team_zone.clone(),
-                                None,
-                                c.id,
-                                points_to_top,
-                                context,
-                            )
-                        })
-                        .collect()
-                } else {
-                    fallback_challenges
-                }
+
+                (1..config.num_challenges)
+                    .map(|_| {
+                        (
+                            vec![unspecific_filter.clone()],
+                            GC::new("unspecific").dont_zone(),
+                        )
+                    })
+                    .chain(vec![(vec![zkaff_filter], GC::new("zkaff"))])
+                    .collect()
             }
         };
-        self.challenges.shuffle(&mut rng());
-    }
 
-    /// Some weird bad code that still works and is used in challenge generation. Will try to
-    /// generate some fallback challenges at any cost, and if things go wrong, those challenges may
-    /// be kind of broken (but that is to be expected).
-    pub(self) fn generate_fallback_challenges(
-        &self,
-        raw_challenges: &[DBEntry<ChallengeEntry>],
-        centre_zone: DBEntry<ZoneEntry>,
-        team_zone: DBEntry<ZoneEntry>,
-        points_to_top: Option<u64>,
-        context: &SessionContext,
-    ) -> Vec<InOpenChallenge> {
-        // this function is old, but it still generates the fallback challenges during challenge
-        // selection. It is old and ugly, but it's not worth changing (yet), especially since the
-        // fallback challenge system will probably never change much.
-
-        let challenges = raw_challenges
-            .iter()
-            .filter(|c| {
-                matches!(
-                    c.contents.kind,
-                    ChallengeType::Kaff | ChallengeType::Ortsspezifisch | ChallengeType::Zoneable
-                )
-            })
-            .choose_multiple(&mut rng(), context.config.num_challenges as usize - 1);
-        let mut challenges: Vec<InOpenChallenge> = challenges
-            .iter()
-            .map(|c| {
-                c.contents.challenge(
-                    true,
-                    centre_zone.clone(),
-                    team_zone.clone(),
-                    None,
-                    c.id,
-                    points_to_top,
-                    context,
-                )
-            })
-            .collect();
-        let mut unspecific_challenges: Vec<&DBEntry<ChallengeEntry>> = raw_challenges
-            .iter()
-            .filter(|c| {
-                matches!(
-                    c.contents.kind,
-                    ChallengeType::Unspezifisch | ChallengeType::Zoneable
-                )
-            })
-            .collect();
-        challenges.push(smart_choose(
-            &mut unspecific_challenges,
-            raw_challenges,
-            "choosing the unspecific challenge during fallback generation",
-            false,
-            centre_zone,
-            team_zone,
-            points_to_top,
-            context,
-        ));
-        challenges
+        let mut challenges = Vec::new();
+        for (filters, gc) in gen_infos {
+            let already_ids: Vec<u64> = challenges.iter().map(|c: &InOpenChallenge| c.id).collect();
+            let already_in_filter: Filter = Rc::new(move |c| already_ids.contains(&c.id));
+            challenges.push(match select_challenge(filters, already_in_filter, gc) {
+                Some(c) => c,
+                None => {
+                    eprintln!(
+                        "Engine: EXTREMELY BAD ERROR: couldn't generate any challenges for team {}, giving up.",
+                        self.name
+                    );
+                    return;
+                }
+            });
+        }
+        challenges.shuffle(&mut rng());
+        self.challenges = challenges;
     }
 
     /// Adds a new period with the provided context and pictures to the team with the end time
@@ -915,75 +831,6 @@ impl TeamEntry {
                 self.generate_challenges(context);
                 Ok((completed, request))
             }
-        }
-    }
-}
-
-/// Some weird bad code that still works and is used in challenge generation. Will try to
-/// generate some fallback challenges at any cost, and if things go wrong, those challenges may
-/// be kind of broken (but that is to be expected).
-#[allow(clippy::too_many_arguments)]
-fn smart_choose(
-    challenges: &mut Vec<&DBEntry<ChallengeEntry>>,
-    raw_challenges: &[DBEntry<ChallengeEntry>],
-    context_message: &str,
-    zone_zoneables: bool,
-    centre_zone: DBEntry<ZoneEntry>,
-    team_zone: DBEntry<ZoneEntry>,
-    points_to_top: Option<u64>,
-    context: &SessionContext,
-) -> InOpenChallenge {
-    match challenges.iter().enumerate().choose(&mut rng()) {
-        None => {
-            eprintln!(
-                "Engine: {} Not enough challenges, context: {}. \
-                generatig from all uncompleted challenges within the currents sets",
-                chrono::Local::now(),
-                context_message
-            );
-            let selected = raw_challenges
-                .choose(&mut rng())
-                .cloned()
-                .unwrap_or_else(|| {
-                    eprintln!(
-                        "Engine: {} Not enough challenges, context: {}. \
-                        generating from all challenges",
-                        chrono::Local::now(),
-                        context_message
-                    );
-                    context
-                        .engine_context
-                        .challenge_db
-                        .get_all()
-                        .choose(&mut rng())
-                        .expect(
-                            "There were no raw challenges, \
-                            that should never happen",
-                        )
-                        .clone()
-                });
-            selected.contents.challenge(
-                zone_zoneables,
-                centre_zone,
-                team_zone,
-                None,
-                selected.id,
-                points_to_top,
-                context,
-            )
-        }
-        Some((i, selected)) => {
-            let ret = selected.contents.challenge(
-                zone_zoneables,
-                centre_zone,
-                team_zone,
-                None,
-                selected.id,
-                points_to_top,
-                context,
-            );
-            challenges.remove(i);
-            ret
         }
     }
 }
