@@ -716,8 +716,8 @@ impl TeamEntry {
         let mut challenges = Vec::new();
         for (filters, gc) in gen_infos {
             let already_ids: Vec<u64> = challenges.iter().map(|c: &InOpenChallenge| c.id).collect();
-            let already_in_filter: Filter = Rc::new(move |c| already_ids.contains(&c.id));
-            challenges.push(match select_challenge(filters, already_in_filter, gc) {
+            let not_generated_filter: Filter = Rc::new(move |c| !already_ids.contains(&c.id));
+            challenges.push(match select_challenge(filters, not_generated_filter, gc) {
                 Some(c) => c,
                 None => {
                     eprintln!(
