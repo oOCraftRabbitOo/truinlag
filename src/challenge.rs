@@ -319,11 +319,35 @@ impl ChallengeEntry {
                     as i64;
             }
         }
-        if !self.fixed {
-            points += Normal::new(0_f64, points as f64 * config.relative_standard_deviation)
-                .expect("this cannot fail, since both μ and σ must have real values")
-                .sample(&mut rng())
-                .round() as i64;
+        points += Normal::new(0_f64, points as f64 * config.relative_standard_deviation)
+            .expect("this cannot fail, since both μ and σ must have real values")
+            .sample(&mut rng())
+            .round() as i64;
+        if self.fixed {
+            let fixed_points =
+                self.additional_points as i64 + self.points_per_rep as i64 * reps as i64;
+            // if the regularly calculated points are way larger than the fixed points, use the
+            // regular points instead
+            if !fixed_points as f32 * config.fixed_cutoff_mult <= (points - fixed_points) as f32 {
+                points = fixed_points
+            } else {
+                // the regular points shouldn't include the fixed points, since the fixed points
+                // are intended to represent the value of the challenge as a whole.
+                points -= fixed_points;
+                eprintln!(
+                    "Engine: challenge {} (id: {}) \
+                    granted {} normal points but only {} fixed points, \
+                    using normal points instead (total: {}).",
+                    self.title
+                        .clone()
+                        .or(self.place.clone())
+                        .unwrap_or("[no title]".into()),
+                    id,
+                    points,
+                    fixed_points,
+                    points - fixed_points,
+                )
+            }
         }
 
         // generating title and description. These may be automatically generated based on the

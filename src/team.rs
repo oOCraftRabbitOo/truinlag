@@ -175,7 +175,12 @@ impl TeamEntry {
                 None => false,
                 Some(timer) => chrono::Local::now() <= timer.end_time,
             },
+            period_id: self.period_id(),
         }
+    }
+
+    pub fn period_id(&self) -> usize {
+        self.periods.len()
     }
 
     pub fn add_location(

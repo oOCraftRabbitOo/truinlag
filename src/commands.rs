@@ -81,10 +81,12 @@ pub enum EngineAction {
     Catch {
         catcher: usize,
         caught: usize,
+        period_id: usize,
     },
     Complete {
         completer: usize,
         completed: usize,
+        period_id: usize,
     },
     SendLocation {
         player: u64,

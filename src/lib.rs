@@ -409,6 +409,7 @@ pub struct Team {
     pub completed_challenges: Vec<CompletedChallenge>,
     pub location: Option<DetailedLocation>,
     pub in_grace_period: bool,
+    pub period_id: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

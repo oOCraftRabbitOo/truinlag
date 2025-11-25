@@ -298,6 +298,7 @@ impl Session {
         &mut self,
         catcher: usize,
         caught: usize,
+        period_id: usize,
         context: &mut SessionContext,
     ) -> InternEngineResponsePackage {
         match self.game {
@@ -309,43 +310,59 @@ impl Session {
                 let broadcast;
                 let mut runtime_requests = Vec::new();
                 match self.teams.get(catcher) {
-                    Some(catcher_team) => match catcher_team.role {
-                        TeamRole::Catcher => match self.teams.get(caught) {
-                            Some(caught_team) => match caught_team.role {
-                                TeamRole::Runner => {
-                                    if caught_team.location().is_some()
-                                        && catcher_team.location().is_some()
-                                    {
-                                        let caught_location =
-                                            caught_team.location_as_point().unwrap();
-                                        let catcher_location =
-                                            catcher_team.location_as_point().unwrap();
-                                        if geo::Geodesic.distance(caught_location, catcher_location)
-                                            > 300.0
+                    Some(catcher_team) => {
+                        if period_id != catcher_team.period_id() {
+                            return Error(BadData(format!(
+                                "period_id {} is invalid, should be {}",
+                                period_id,
+                                catcher_team.period_id()
+                            )))
+                            .into();
+                        }
+                        match catcher_team.role {
+                            TeamRole::Catcher => match self.teams.get(caught) {
+                                Some(caught_team) => match caught_team.role {
+                                    TeamRole::Runner => {
+                                        if caught_team.location().is_some()
+                                            && catcher_team.location().is_some()
                                         {
-                                            return Error(TeamsTooFar).into();
+                                            let caught_location =
+                                                caught_team.location_as_point().unwrap();
+                                            let catcher_location =
+                                                catcher_team.location_as_point().unwrap();
+                                            if geo::Geodesic
+                                                .distance(caught_location, catcher_location)
+                                                > 300.0
+                                            {
+                                                return Error(TeamsTooFar).into();
+                                            }
+                                        } else {
+                                            eprintln!(
+                                                "engine: session: no location for team {} or {}",
+                                                catcher_team.name, caught_team.name
+                                            )
                                         }
-                                    } else {
-                                        eprintln!(
-                                            "engine: session: no location for team {} or {}",
-                                            catcher_team.name, caught_team.name
-                                        )
+                                        bounty = caught_team.bounty;
+                                        broadcast = Caught {
+                                            catcher: catcher_team.to_sendable(catcher, context),
+                                            caught: caught_team.to_sendable(caught, context),
+                                        };
                                     }
-                                    bounty = caught_team.bounty;
-                                    broadcast = Caught {
-                                        catcher: catcher_team.to_sendable(catcher, context),
-                                        caught: caught_team.to_sendable(caught, context),
-                                    };
-                                }
-                                TeamRole::Catcher => return Error(TeamIsCatcher(caught)).into(),
-                            },
-                            None => {
-                                return Error(NotFound(format!("caught team with id {}", caught)))
+                                    TeamRole::Catcher => {
+                                        return Error(TeamIsCatcher(caught)).into()
+                                    }
+                                },
+                                None => {
+                                    return Error(NotFound(format!(
+                                        "caught team with id {}",
+                                        caught
+                                    )))
                                     .into()
-                            }
-                        },
-                        TeamRole::Runner => return Error(TeamIsRunner(catcher)).into(),
-                    },
+                                }
+                            },
+                            TeamRole::Runner => return Error(TeamIsRunner(catcher)).into(),
+                        }
+                    }
                     None => {
                         return Error(NotFound(format!("catcher team with id {}", catcher))).into()
                     }
@@ -387,11 +404,20 @@ impl Session {
         &mut self,
         completer: usize,
         completed: usize,
+        period_id: usize,
         context: &SessionContext,
     ) -> InternEngineResponsePackage {
         match self.game {
             Some(_) => match self.teams.get_mut(completer) {
                 Some(completer_team) => {
+                    if period_id != completer_team.period_id() {
+                        return Error(BadData(format!(
+                            "period_id {} is invalid, should be {}",
+                            period_id,
+                            completer_team.period_id()
+                        )))
+                        .into();
+                    }
                     if completer_team
                         .periods
                         .last()
@@ -832,11 +858,16 @@ impl Session {
             AssignPlayerToTeam { player, team } => {
                 self.assign_player_to_team(player, team, &context)
             }
-            Catch { catcher, caught } => self.catch(catcher, caught, &mut context),
+            Catch {
+                catcher,
+                caught,
+                period_id,
+            } => self.catch(catcher, caught, period_id, &mut context),
             Complete {
                 completer,
                 completed,
-            } => self.complete(completer, completed, &context),
+                period_id,
+            } => self.complete(completer, completed, period_id, &context),
             GetState => self.get_state(&context),
             AddTeam {
                 name,

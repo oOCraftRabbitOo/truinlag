@@ -872,10 +872,12 @@ impl Engine {
             Catch {
                 catcher: _,
                 caught: _,
+                period_id: _,
             } => Error(NoSessionSupplied).into(),
             Complete {
                 completer: _,
                 completed: _,
+                period_id: _,
             } => Error(NoSessionSupplied).into(),
             SendLocation {
                 player: _,
