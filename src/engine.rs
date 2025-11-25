@@ -263,6 +263,7 @@ impl Engine {
                             let context = EngineContext {
                                 player_db: &self.players,
                                 challenge_db: &self.challenges,
+                                challenge_set_db: &self.challenge_sets,
                                 zone_db: &self.zones,
                                 past_game_db: &mut self.past_games,
                                 picture_db: &mut self.pictures,
@@ -283,6 +284,7 @@ impl Engine {
                 let context = EngineContext {
                     player_db: &self.players,
                     challenge_db: &self.challenges,
+                    challenge_set_db: &self.challenge_sets,
                     zone_db: &self.zones,
                     past_game_db: &mut self.past_games,
                     picture_db: &mut self.pictures,

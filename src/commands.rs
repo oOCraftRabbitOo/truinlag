@@ -237,6 +237,7 @@ pub enum Error {
     TextError(String), // Some other kind of error with a custom text
     PictureProblem,    // An Image-related error
     TooRapid,          // When requests are sent too rapidly
+    TooFewChallenges,  // When there are too few challenges to start a game
 }
 
 impl std::fmt::Display for Error {
@@ -259,6 +260,7 @@ impl std::fmt::Display for Error {
             Self::TextError(text) => write!(f, "{}", text),
             Self::PictureProblem => write!(f, "there was a problem processing an image"),
             Self::TooRapid => write!(f, "not enough time has passed since the last request, hold your horses"),
+            Self::TooFewChallenges => write!(f, "there are not enough challenges to start a game in the challenge db"),
         }
     }
 }

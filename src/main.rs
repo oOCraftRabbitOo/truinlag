@@ -165,7 +165,7 @@ where
     T: Clone,
 {
     /// Creates a `DBEntry` representation of the `ClonedDBEntry`
-    pub fn as_borrowed(&self) -> DBEntry<T> {
+    pub fn as_borrowed(&self) -> DBEntry<'_, T> {
         DBEntry {
             id: self.id,
             contents: &self.contents,
@@ -540,6 +540,11 @@ pub struct Config {
     /// the multiplier m using the formula $p = m(b-d^e)$.
     /// *Recommended Value:* **32.0**
     pub zkaff_departures_multiplier: f32,
+    /// If a challenge has fixed points, it does not follow normal point calculation. In order to
+    /// avoid imbalance, if the regularly calcuted points minus the fixed points are more than
+    /// fixed_cutoff_mult times as large than the fixed points, the regular points minus the fixed
+    /// points are used.
+    pub fixed_cutoff_mult: f32,
 
     // underdog system
     /// Teams that are far behind first place should get a subtle boost in points. The starting
@@ -712,6 +717,7 @@ impl Default for Config {
             zkaff_departures_exponent: 1.0 / 3.0,
             zkaff_departures_multiplier: 32.0,
             zkaff_departures_base: 7.0,
+            fixed_cutoff_mult: 2.0,
             underdog_starting_difference: 1000,
             underdog_multiplyer_per_1000: 0.25,
             perim_max_kaff: 4,

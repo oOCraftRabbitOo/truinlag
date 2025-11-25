@@ -163,6 +163,7 @@ impl ChallengeEntry {
     }
 
     /// Generates points for and returns an open challenge
+    #[allow(clippy::too_many_arguments)]
     pub fn challenge(
         &self,
         zone_zoneables: bool,

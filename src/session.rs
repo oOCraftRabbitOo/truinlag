@@ -528,11 +528,12 @@ impl Session {
                     )))
                     .into();
                 }
+
+                // Set up teams
                 let team_ids = 0..self.teams.len();
                 let catcher_ids = team_ids.clone().choose_multiple(&mut rng(), num_catchers);
                 let runner_ids: Vec<usize> =
                     team_ids.filter(|i| !catcher_ids.contains(i)).collect();
-                let config = self.config();
                 for id in catcher_ids {
                     if let Err(err) = self.teams[id].start_catcher(context) {
                         return Error(err).into();
