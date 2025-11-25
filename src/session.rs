@@ -486,8 +486,39 @@ impl Session {
         match self.game {
             Some(_) => Error(GameInProgress).into(),
             None => {
-                // Set up teams
-                let num_catchers = self.config().num_catchers as usize;
+                let config = self.config();
+
+                // checking for whether some config values are conflicting
+                if (context.engine_context.challenge_db.count() as u64) < config.num_challenges {
+                    return Error(TooFewChallenges).into();
+                }
+
+                if context
+                    .engine_context
+                    .zone_db
+                    .find(|z| z.zone == config.centre_zone)
+                    .is_none()
+                {
+                    return Error(NotFound(format!("centre zone {}", config.centre_zone))).into();
+                }
+                if context
+                    .engine_context
+                    .zone_db
+                    .find(|z| z.zone == config.start_zone)
+                    .is_none()
+                {
+                    return Error(NotFound(format!("start zone {}", config.start_zone))).into();
+                }
+
+                let set = config
+                    .challenge_sets
+                    .iter()
+                    .find(|&&s| context.engine_context.challenge_set_db.get(s).is_none());
+                if let Some(bad_set) = set {
+                    return Error(NotFound(format!("challenge set with id {}", bad_set))).into();
+                }
+
+                let num_catchers = config.num_catchers as usize;
                 if num_catchers >= self.teams.len() {
                     return Error(BadData(format!(
                         "cannot start game with {} catchers \
