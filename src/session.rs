@@ -565,6 +565,9 @@ impl Session {
                         return Error(err).into();
                     }
                 }
+                // artificially disable underdog bonus for initial challenge generation. Otherwise,
+                // some teams may have loads of points from the last game that would spill over.
+                context.top_team_points = None;
                 for id in runner_ids {
                     if let Err(err) = self.teams[id].start_runner(context) {
                         return Error(err).into();
