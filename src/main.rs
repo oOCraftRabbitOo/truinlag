@@ -26,6 +26,7 @@ use truinlag::{
 /// this just starts the manager from the runtime :)
 #[tokio::main]
 async fn main() -> Result<()> {
+    pretty_env_logger::init();
     manager().await.unwrap();
     Ok(())
 }

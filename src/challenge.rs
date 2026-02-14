@@ -7,6 +7,7 @@ use bonsaidb::core::{
     },
 };
 use chrono::Datelike;
+use log::trace;
 use rand::prelude::*;
 use rand::rng;
 use rand_distr::{Distribution, Normal};
@@ -256,23 +257,35 @@ impl ChallengeEntry {
         }
 
         // point calculation
+        trace!("calculating points for challenge {id}");
         let mut points = 0_i64;
         points += self.additional_points as i64;
+        trace!(
+            "adding additional points {} => {}",
+            self.additional_points,
+            points
+        );
         if let Some(kaffskala) = self.kaffskala {
             points += kaffskala as i64 * config.points_per_kaffness as i64;
+            trace!("adding kaffskala points => {points}");
         }
         if let Some(grade) = self.grade {
             points += grade as i64 * config.points_per_grade as i64;
+            trace!("adding grade points => {points}");
         }
         points += self.walking_time as i64 * config.points_per_walking_minute as i64;
+        trace!("adding walking time => {points}");
         points += self.stationary_time as i64 * config.points_per_stationary_minute as i64;
+        trace!("adding stationary time => {points}");
         let reps = self.repetitions.clone().choose(&mut rng()).unwrap_or(0);
         points += reps as i64 * self.points_per_rep as i64;
-        // zone points
+        trace!("adding repetition points => {points}");
+        // zone / distance points
         if let Some(z) = &zone {
             points += z.contents.zonic_kaffness(config) as i64;
+            trace!("adding zonic kaffness => {points}");
             points += (config.travel_minutes_multiplier
-                * (*current_zone
+                * ((*current_zone
                     .contents
                     .minutes_to
                     .get(&z.id)
@@ -284,33 +297,42 @@ impl ChallengeEntry {
                         );
                         &0
                     }) as f32)
-                    .powf(config.travel_minutes_exponent)) as i64;
+                    .powf(config.travel_minutes_exponent))) as i64;
+            trace!("adding travel time => {points}");
         }
+        // zkaff / zoneable points
         match self.kind {
-            // zkaff points
             ZKaff => {
                 if self.dead_end {
                     points += config.zkaff_points_for_dead_end as i64;
+                    trace!("adding dead end => {points}");
                 }
                 points +=
                     self.station_distance as i64 / config.zkaff_station_distance_divisor as i64;
+                trace!("adding station distance => {points}");
                 points += self.time_to_hb as i64 * config.zkaff_points_per_minute_to_hb as i64;
+                trace!("adding time to hb => {points}");
                 points += ((config.zkaff_departures_base
                     - (self.departures as f32).powf(config.zkaff_departures_exponent))
                     * config.zkaff_departures_multiplier) as i64;
+                trace!("adding departures points => {points}")
             }
             Zoneable => {
                 if zone_zoneables {
                     points += config.points_for_zoneable as i64;
+                    trace!("adding points for zoned zoneable => {points}")
                 }
             }
             _ => (),
         }
+        // bias points
         match chrono::Local::now().date_naive().weekday() {
             chrono::Weekday::Sat => points = (points as f32 * self.bias_sat) as i64,
             chrono::Weekday::Sun => points = (points as f32 * self.bias_sun) as i64,
             _ => (),
         }
+        trace!("adding points bias => {points}");
+        // underdog points
         if let Some(p) = points_to_top {
             let p = p as i64 - config.underdog_starting_difference as i64;
             if p.is_positive() {
@@ -319,13 +341,17 @@ impl ChallengeEntry {
                     as i64;
             }
         }
+        trace!("adding underdog points => {points}");
+        // wiggle / fixed
         points += Normal::new(0_f64, points as f64 * config.relative_standard_deviation)
             .expect("this cannot fail, since both μ and σ must have real values")
             .sample(&mut rng())
             .round() as i64;
+        trace!("wiggling points => {points}");
         if self.fixed {
             let fixed_points =
                 self.additional_points as i64 + self.points_per_rep as i64 * reps as i64;
+            trace!("fixed points are {fixed_points}");
             // if the regularly calculated points are way larger than the fixed points, use the
             // regular points instead
             if !fixed_points as f32 * config.fixed_cutoff_mult <= (points - fixed_points) as f32 {
@@ -348,7 +374,9 @@ impl ChallengeEntry {
                     points - fixed_points,
                 )
             }
+            trace!("applying fixed points => {points}");
         }
+        trace!("total calculated points are {points}");
 
         // generating title and description. These may be automatically generated based on the
         // place name.

@@ -26,6 +26,8 @@ image = "0.25"
 serialimage = "4.1"
 geo = { version = "0.30", features = ["serde"], optional = true }
 strsim = { version = "0.11", optional = true }
+log = "0.4"
+pretty_env_logger = "0.5"
 
 [features]
 build-binary = [
