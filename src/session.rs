@@ -1,15 +1,15 @@
 use std::num::NonZeroU32;
 
 use crate::{
+    Config, EngineContext, InGame, PartialConfig, PastGame, PictureEntry, SessionContext,
     challenge::InOpenChallenge,
     runtime::{
         InternEngineCommand, InternEngineResponse, InternEngineResponsePackage, RuntimeRequest,
     },
     team::{PeriodContext, TeamEntry},
-    Config, EngineContext, InGame, PartialConfig, PastGame, PictureEntry, SessionContext,
 };
 use bonsaidb::core::schema::Collection;
-use chrono::Timelike;
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike};
 use geo::Distance;
 use partially::Partial;
 use rand::{rng, seq::IteratorRandom};
@@ -349,7 +349,7 @@ impl Session {
                                         };
                                     }
                                     TeamRole::Catcher => {
-                                        return Error(TeamIsCatcher(caught)).into()
+                                        return Error(TeamIsCatcher(caught)).into();
                                     }
                                 },
                                 None => {
@@ -357,14 +357,14 @@ impl Session {
                                         "caught team with id {}",
                                         caught
                                     )))
-                                    .into()
+                                    .into();
                                 }
                             },
                             TeamRole::Runner => return Error(TeamIsRunner(catcher)).into(),
                         }
                     }
                     None => {
-                        return Error(NotFound(format!("catcher team with id {}", catcher))).into()
+                        return Error(NotFound(format!("catcher team with id {}", catcher))).into();
                     }
                 };
                 let period_id;
@@ -375,7 +375,7 @@ impl Session {
                             .push(catcher_team.have_caught(bounty, caught, catcher, context));
                     }
                     None => {
-                        return Error(NotFound(format!("catcher team with id {}", catcher))).into()
+                        return Error(NotFound(format!("catcher team with id {}", catcher))).into();
                     }
                 }
                 match self.teams.get_mut(caught) {
@@ -383,7 +383,7 @@ impl Session {
                         caught_team.be_caught(catcher);
                     }
                     None => {
-                        return Error(NotFound(format!("caught team with id {}", caught))).into()
+                        return Error(NotFound(format!("caught team with id {}", caught))).into();
                     }
                 }
                 InternEngineResponsePackage {
@@ -822,6 +822,24 @@ impl Session {
         Success.into()
     }
 
+    fn save_current_game(&mut self, context: &mut SessionContext) -> InternEngineResponsePackage {
+        // make up some shit
+        let game = InGame {
+            name: "TwainWag Twewve".into(),
+            mode: Mode::Traditional,
+            start_time: Local.with_ymd_and_hms(2025, 11, 8, 9, 0, 0).unwrap(),
+            timer: crate::TimerHook {
+                payload: InternEngineCommand::AutoSave,
+                end_time: Local::now(),
+                id: 0,
+            },
+        };
+
+        let past_game = PastGame::new_now(game, self.teams.clone());
+        context.engine_context.past_game_db.add(past_game);
+        Success.into()
+    }
+
     /// The core method of the session that processes commands with sessions.
     ///
     /// The method takes a command to process, as well as a session id. This should be the id of
@@ -836,6 +854,7 @@ impl Session {
     ) -> InternEngineResponsePackage {
         let mut context = self.context(context, session_id);
         match command {
+            SaveCurrentGame => self.save_current_game(&mut context),
             SetGameConfig(new_config) => self.set_game_config(new_config),
             GetGameConfig => self.send_game_config(),
             GetPastLocations {

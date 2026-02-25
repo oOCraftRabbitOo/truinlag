@@ -151,6 +151,7 @@ pub enum EngineAction {
     },
     GetGameConfig,
     SetGameConfig(PartialGameConfig),
+    SaveCurrentGame,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -245,8 +246,14 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoSessionSupplied => write!(f, "A sesssion specific command (like 'addTeam') was called without a session being supplied."),
-            Self::SessionSupplied => write!(f, "A session unspecific command (like 'addPlayer') was called with a session."),
+            Self::NoSessionSupplied => write!(
+                f,
+                "A sesssion specific command (like 'addTeam') was called without a session being supplied."
+            ),
+            Self::SessionSupplied => write!(
+                f,
+                "A session unspecific command (like 'addPlayer') was called with a session."
+            ),
             Self::NotFound(ctx) => write!(f, "{} was not found", ctx),
             Self::TeamExists(team) => write!(f, "Team {} already exists", team),
             Self::AlreadyExists => write!(f, "Already exists"),
@@ -261,8 +268,14 @@ impl std::fmt::Display for Error {
             Self::BadData(text) => write!(f, "bad data: {}", text),
             Self::TextError(text) => write!(f, "{}", text),
             Self::PictureProblem => write!(f, "there was a problem processing an image"),
-            Self::TooRapid => write!(f, "not enough time has passed since the last request, hold your horses"),
-            Self::TooFewChallenges => write!(f, "there are not enough challenges to start a game in the challenge db"),
+            Self::TooRapid => write!(
+                f,
+                "not enough time has passed since the last request, hold your horses"
+            ),
+            Self::TooFewChallenges => write!(
+                f,
+                "there are not enough challenges to start a game in the challenge db"
+            ),
         }
     }
 }

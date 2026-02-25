@@ -1,30 +1,30 @@
 use crate::{
+    ClonedDBEntry, DBMirror, EngineContext, EngineSchema, PastGame, PictureEntry, PlayerEntry,
+    TimerTracker, ZoneEntry,
     challenge::{ChallengeEntry, ChallengeSetEntry},
     runtime::{
         InternEngineCommand, InternEngineResponse, InternEngineResponsePackage, RuntimeRequest,
     },
     session::Session,
-    ClonedDBEntry, DBMirror, EngineContext, EngineSchema, PastGame, PictureEntry, PlayerEntry,
-    TimerTracker, ZoneEntry,
 };
 use bonsaidb::{
     core::{connection::StorageConnection, schema::SerializedCollection, transaction::Transaction},
     local::{
-        config::{self, Builder},
         AsyncDatabase, Database, Storage,
+        config::{self, Builder},
     },
 };
 use std::{
     collections::HashMap,
     path::Path,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 use tokio::{
     sync::Notify,
-    time::{sleep, Duration},
+    time::{Duration, sleep},
 };
 use truinlag::{
     commands::{
@@ -364,6 +364,10 @@ impl Engine {
                     self.pictures.clear_pending_deletions();
                     let picture_deletions = self.pictures.extract_deletions();
 
+                    let past_game_changes = self.past_games.extract_changes();
+                    self.past_games.clear_pending_deletions();
+                    let past_game_deletions = self.past_games.extract_deletions();
+
                     self.changes_since_save = false;
 
                     let autosave_in_progress = self.autosave_in_progress.clone();
@@ -420,6 +424,15 @@ impl Engine {
                                     .unwrap();
                                 vec_delete_in_transaction::<PictureEntry>(
                                     picture_deletions,
+                                    &mut transaction,
+                                    &db,
+                                )
+                                .await
+                                .unwrap();
+                                vec_overwrite_in_transaction(past_game_changes, &mut transaction)
+                                    .unwrap();
+                                vec_delete_in_transaction::<PastGame>(
+                                    past_game_deletions,
                                     &mut transaction,
                                     &db,
                                 )
@@ -917,6 +930,7 @@ impl Engine {
             } => Error(NoSessionSupplied).into(),
             GetGameConfig => Error(NoSessionSupplied).into(),
             SetGameConfig(_) => Error(NoSessionSupplied).into(),
+            SaveCurrentGame => Error(NoSessionSupplied).into(),
         }
     }
 }
